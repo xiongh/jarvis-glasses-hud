@@ -321,8 +321,15 @@
             const codeDisplay = make('h2', 'hud-youtube-pair-code', youtubeState.pairing.userCode); codeDisplay.setAttribute('aria-label', 'One-time phone approval code');
             const help = make('p', 'copy hud-youtube-help', 'If automatic opening was blocked, use the secure phone link below. Google sign-in and approval continue automatically.');
             const servicePage = make('a', 'action hud-youtube-handoff', 'OPEN PHONE SIGN-IN'); servicePage.href = youtubeState.pairing.connectUrl; servicePage.target = '_blank'; servicePage.rel = 'noopener noreferrer'; servicePage.dataset.youtubeFocus = 'true';
+            const sharePhoneLink = make('button', 'action', 'SHARE PHONE SIGN-IN LINK'); sharePhoneLink.type = 'button'; sharePhoneLink.dataset.youtubeFocus = 'true'; sharePhoneLink.addEventListener('click', async () => {
+              try {
+                if (globalThis.navigator?.share) await globalThis.navigator.share({ title: 'JARVIS YouTube pairing', text: 'Open this short-lived link on your phone to connect YouTube.', url: youtubeState.pairing.connectUrl });
+                else if (globalThis.navigator?.clipboard?.writeText) { await globalThis.navigator.clipboard.writeText(youtubeState.pairing.connectUrl); youtubeState.status = 'One-time phone link copied. Open it on your phone before it expires.'; status.textContent = youtubeState.status; }
+                else { youtubeState.status = 'Use OPEN PHONE SIGN-IN or enter the one-time code on the phone connection page.'; status.textContent = youtubeState.status; }
+              } catch (error) { youtubeState.status = error?.name === 'AbortError' ? 'Phone link sharing was cancelled. The one-time link remains available below.' : 'Could not share the phone link. Open it directly below.'; status.textContent = youtubeState.status; }
+            });
             const check = make('button', 'action', 'CHECK PHONE APPROVAL'); check.type = 'button'; check.dataset.youtubeFocus = 'true'; check.addEventListener('click', () => { void checkYoutubePairing(); });
-            outlet.append(codeDisplay, help, servicePage, check);
+            outlet.append(codeDisplay, help, servicePage, sharePhoneLink, check);
           }
         } else {
           const nav = make('nav', 'hud-youtube-nav', ''); nav.setAttribute('aria-label', 'YouTube sections');
