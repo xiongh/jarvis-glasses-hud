@@ -49,8 +49,16 @@
     let gateway = '';
     try { const candidate = new URL(new URLSearchParams(globalThis.location?.search || '').get('gateway') || ''); if (candidate.protocol === 'https:' && !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(candidate.hostname)) gateway = candidate.origin; } catch {}
     const request = async (path, body, authorization = '') => {
-      const response = await globalThis.fetch(`${gateway}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}) }, body: JSON.stringify(body) });
-      const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'Connection failed.'); return data;
+      let response;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { response = await globalThis.fetch(`${gateway}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}) }, body: JSON.stringify(body) }); }
+        catch (error) { if (attempt === 2) throw error; await new Promise((resolve) => setTimeout(resolve, 350 * (2 ** attempt))); continue; }
+        if (![502, 503, 504].includes(response.status) || attempt === 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 350 * (2 ** attempt)));
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) { const error = new Error(data.error || 'Connection failed.'); error.status = response.status; throw error; }
+      return data;
     };
     const render = (state) => {
       outlet.replaceChildren();
@@ -78,7 +86,7 @@
         const codeInput = document.createElement('input'); codeInput.type = 'password'; codeInput.placeholder = 'ONE-TIME PAIRING CODE'; codeInput.setAttribute('aria-label', 'One-time pairing code');
         const pair = make('button', 'action', 'PAIR SECURE AI'); pair.type = 'button'; pair.addEventListener('click', async () => { try { const candidate = new URL(gatewayInput.value); gateway = candidate.protocol === 'https:' ? candidate.origin : ''; } catch { gateway = ''; } if (!gateway) { status.textContent = 'PAIRING: USE A PUBLIC HTTPS GATEWAY URL.'; return; } try { pair.disabled = true; const data = await request('/v1/pair', { code: codeInput.value }); token = data.accessToken; expiresAt = Number(data.expiresAt) || 0; codeInput.value = ''; status.textContent = 'AI GATEWAY: PAIRED · ENTER A MESSAGE.'; } catch { token = ''; status.textContent = 'PAIRING FAILED. CHECK THE CODE OR GATEWAY.'; } finally { pair.disabled = false; } });
         const prompt = document.createElement('input'); prompt.type = 'text'; prompt.placeholder = 'ASK JARVIS'; prompt.maxLength = 1000; prompt.setAttribute('aria-label', 'Message for JARVIS');
-        const send = make('button', 'action', 'SEND'); send.type = 'button'; send.addEventListener('click', async () => { if (!token || expiresAt <= Date.now()) { status.textContent = 'PAIR SECURE AI FIRST.'; return; } const message = prompt.value.trim(); if (!message) return; messages.push({ role: 'user', text: message }); prompt.value = ''; status.textContent = 'JARVIS IS THINKING…'; send.disabled = true; try { const data = await request('/v1/chat', { message }, token); messages.push({ role: 'assistant', text: String(data.reply || '').slice(0, 2000) }); status.textContent = 'AI GATEWAY: PAIRED'; } catch { token = ''; status.textContent = 'CHAT UNAVAILABLE. SESSION CLEARED.'; } finally { send.disabled = false; render(hud.snapshot()); } });
+        const send = make('button', 'action', 'SEND'); send.type = 'button'; send.addEventListener('click', async () => { if (!token || expiresAt <= Date.now()) { token = ''; status.textContent = 'SESSION EXPIRED. PAIR SECURE AI AGAIN.'; return; } const message = prompt.value.trim(); if (!message) return; messages.push({ role: 'user', text: message }); prompt.value = ''; status.textContent = 'JARVIS IS THINKING…'; send.disabled = true; try { const data = await request('/v1/chat', { message }, token); messages.push({ role: 'assistant', text: String(data.reply || '').slice(0, 2000) }); status.textContent = 'AI GATEWAY: PAIRED'; } catch (error) { if (error.status === 401) { token = ''; expiresAt = 0; status.textContent = 'SESSION EXPIRED. PAIR SECURE AI AGAIN.'; } else { status.textContent = 'AI TEMPORARILY UNAVAILABLE. SESSION KEPT; TRY AGAIN.'; } } finally { send.disabled = false; render(hud.snapshot()); } });
         outlet.append(gatewayInput, codeInput, pair, prompt, send, make('p', 'copy', 'Focus a field to use Neural Band handwriting, dictation, or the on-screen keyboard. Pairing code and session token remain in memory only.'));
         const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
       }
