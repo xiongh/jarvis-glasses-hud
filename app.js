@@ -6,6 +6,7 @@
   'use strict';
 
   const YOUTUBE_API_PREFIX = '/v1/youtube';
+  const DEFAULT_YOUTUBE_WORKER_ORIGIN = 'https://jarvis-glasses-youtube.hlao-xiong.workers.dev';
   const RELEASE_MANIFEST_URL = './release-manifest.json';
 
   function normalizeBackendOrigin(value) {
@@ -19,8 +20,8 @@
     } catch { return ''; }
   }
 
-  function createYouTubeClient({ fetchImpl = globalThis.fetch, backendOrigin = '', now = Date.now } = {}) {
-    let base = normalizeBackendOrigin(backendOrigin);
+  function createYouTubeClient({ fetchImpl = globalThis.fetch, backendOrigin = DEFAULT_YOUTUBE_WORKER_ORIGIN, now = Date.now } = {}) {
+    let base = normalizeBackendOrigin(backendOrigin) || DEFAULT_YOUTUBE_WORKER_ORIGIN;
     let deviceCredential = '';
     let expiresAt = 0;
     let pairing = null;
@@ -177,9 +178,9 @@
       return data;
     };
     let youtubeBackend = '';
-    try { youtubeBackend = normalizeBackendOrigin(globalThis.localStorage?.getItem('jarvis.youtube.backend-origin') || ''); } catch {}
+    try { youtubeBackend = normalizeBackendOrigin(globalThis.localStorage?.getItem('jarvis.youtube.backend-origin') || '') || DEFAULT_YOUTUBE_WORKER_ORIGIN; } catch { youtubeBackend = DEFAULT_YOUTUBE_WORKER_ORIGIN; }
     const youtube = createYouTubeClient({ backendOrigin: youtubeBackend });
-    const youtubeState = { section: 'home', status: 'Set the HTTPS Cloudflare YouTube Worker origin, then approve pairing on your iPhone.', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, currentIndex: -1, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null };
+    const youtubeState = { section: 'home', status: 'Not connected. Connect YouTube on your phone to enable account features.', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, currentIndex: -1, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null };
     let youtubePlayer = null;
     let youtubeProgressTimer = null;
     let youtubeRecordedStart = false;
@@ -280,35 +281,19 @@
       if (state.screen === 'youtube') {
         outlet.append(make('p', 'eyebrow', 'JARVIS MEDIA'), make('h1', 'detail-title', 'YOUTUBE'));
         const status = make('p', 'status hud-youtube-status', youtubeState.status); outlet.append(status);
-        if (!youtube.backendOrigin) {
-          const backend = document.createElement('input'); backend.type = 'url'; backend.placeholder = 'HTTPS YOUTUBE WORKER ORIGIN'; backend.setAttribute('aria-label', 'HTTPS YouTube Worker origin'); backend.dataset.youtubeFocus = 'true';
-          const saveBackend = make('button', 'action', 'SAVE YOUTUBE SERVICE'); saveBackend.type = 'button'; saveBackend.dataset.youtubeFocus = 'true'; saveBackend.addEventListener('click', () => {
-            const normalized = youtube.setBackendOrigin(backend.value);
-            if (!normalized) { youtubeState.status = 'Use an HTTPS Cloudflare Worker origin. Local and private network addresses are not accepted.'; status.textContent = youtubeState.status; return; }
-            try { globalThis.localStorage?.setItem('jarvis.youtube.backend-origin', normalized); } catch {}
-            youtubeState.status = 'Cloud YouTube service saved in this browser. Google credentials remain server-side.'; render(hud.snapshot());
-          }); outlet.append(backend, saveBackend);
-        } else {
-          const serverLabel = make('p', 'copy hud-youtube-server', `YOUTUBE SERVICE: ${youtube.backendOrigin}`); outlet.append(serverLabel);
-        }
-        const connectionCheck = make('button', 'action', 'TEST CLOUD SERVICE'); connectionCheck.type = 'button'; connectionCheck.dataset.youtubeFocus = 'true'; connectionCheck.addEventListener('click', async () => {
-          connectionCheck.disabled = true; youtubeState.status = 'Checking HTTPS, DNS, and browser access from this device…'; status.textContent = youtubeState.status;
-          try { await youtube.probe(); youtubeState.status = 'Cloud YouTube service is reachable from this device.'; }
-          catch (error) { youtubeState.status = error.message || 'Connection check failed. Verify the Cloudflare Worker HTTPS endpoint and retry.'; }
-          status.textContent = youtubeState.status; connectionCheck.disabled = false;
-        }); outlet.append(connectionCheck);
+        const accountStatus = make('p', 'copy hud-youtube-account-status', youtube.paired() ? 'Account Status: Connected' : 'Account Status: Not connected'); outlet.append(accountStatus);
         if (!youtube.paired()) {
-          const pair = make('button', 'action', 'START ONE-TIME PAIRING'); pair.type = 'button'; pair.dataset.youtubeFocus = 'true'; pair.addEventListener('click', async () => {
+          const pair = make('button', 'action', 'CONNECT YOUTUBE'); pair.type = 'button'; pair.dataset.youtubeFocus = 'true'; pair.addEventListener('click', async () => {
             pair.disabled = true; youtubeState.status = 'Creating a short-lived pairing code…'; status.textContent = youtubeState.status;
             try {
               const pairing = await youtube.startPairing(); youtubeState.pairing = pairing; youtubeState.status = 'Enter the code on your iPhone and approve it before it expires.'; render(hud.snapshot());
             } catch (error) { youtubeState.status = error.message || 'Could not create a pairing request. Check the HTTPS Worker origin.'; status.textContent = youtubeState.status; }
             finally { pair.disabled = false; }
           });
-          outlet.append(pair, make('p', 'copy hud-youtube-help', 'Google login and account management happen on your iPhone. The glasses receive a short-lived device credential only after server-confirmed approval.'));
+          outlet.append(pair, make('p', 'copy hud-youtube-help', 'Connect on your iPhone, then approve the one-time code shown here.'));
           if (youtubeState.pairing) {
             const codeDisplay = make('h2', 'hud-youtube-pair-code', youtubeState.pairing.userCode); codeDisplay.setAttribute('aria-label', 'One-time phone approval code');
-            const help = make('p', 'copy hud-youtube-help', 'Open the connection page on your iPhone, sign in with Google, and enter this code to approve these glasses.');
+            const help = make('p', 'copy hud-youtube-help', 'On your iPhone, open the phone connection link, sign in, and enter this code.');
             const servicePage = make('a', 'action hud-youtube-handoff', 'OPEN PHONE CONNECTION PAGE'); servicePage.href = youtubeState.pairing.connectUrl; servicePage.target = '_blank'; servicePage.rel = 'noopener noreferrer'; servicePage.dataset.youtubeFocus = 'true';
             const check = make('button', 'action', 'CHECK PHONE APPROVAL'); check.type = 'button'; check.dataset.youtubeFocus = 'true'; check.addEventListener('click', async () => {
               check.disabled = true;
