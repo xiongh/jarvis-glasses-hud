@@ -1,4 +1,8 @@
 :root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; background: #000; color: #fff; }
+.hud-screen input { width: 100%; min-height: 38px; margin: 4px 0; border: 1px solid #8ff; border-radius: 4px; padding: 8px; color: #fff; background: #050808; font: inherit; font-size: 12px; }
+.chat-log { max-height: 145px; overflow: auto; margin: 7px 0; border: 1px solid #466; background: #020605; }
+.chat-message { margin: 0; padding: 7px; border-bottom: 1px solid #244; font-size: 11px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-message.user { color: #baf7d1; }.chat-message.assistant { color: #eafff1; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: #000; }
 .hud { width: min(100vw, 600px); min-height: min(100vh, 600px); margin: 0 auto; padding: 28px; display: flex; flex-direction: column; background: #000; color: #fff; }

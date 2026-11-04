@@ -6,7 +6,7 @@
   'use strict';
 
   const MENU = [
-    { id: 'ai', title: 'AI', detail: 'Local HUD controls are ready. Remote AI and Meta AI actions are unavailable in standalone mode.', available: false },
+    { id: 'ai', title: 'AI', detail: 'Pair a separately hosted, least-privilege AI gateway to chat. No desktop JARVIS endpoint is exposed.', available: true },
     { id: 'vision', title: 'VISION', detail: 'Camera and sensor capture are not part of this Web App. A separately approved Device Access Toolkit integration is required.', available: false },
     { id: 'media', title: 'MEDIA', detail: 'Private media accounts and playback are intentionally not connected to this standalone HUD.', available: false },
     { id: 'settings', title: 'SETTINGS', detail: 'Connection mode is standalone. This build contains no JARVIS server address, credentials, or development controls.', available: false },
@@ -22,12 +22,12 @@
     };
     const select = () => {
       if (state.screen === 'welcome') state = { screen: 'menu', selected: 0 };
-      else if (state.screen === 'menu') state = { ...state, screen: 'detail' };
+      else if (state.screen === 'menu') state = { ...state, screen: state.selected === 0 ? 'chat' : 'detail' };
       else state = { screen: 'menu', selected: state.selected };
       return commit();
     };
     const back = () => {
-      if (state.screen === 'detail') state = { ...state, screen: 'menu' };
+      if (state.screen === 'detail' || state.screen === 'chat') state = { ...state, screen: 'menu' };
       else if (state.screen === 'menu') state = { ...state, screen: 'welcome' };
       return commit();
     };
@@ -45,7 +45,13 @@
   function boot(document) {
     const outlet = document.querySelector('#hud-screen');
     if (!outlet) return null;
-    let hud;
+    let hud; let token = ''; let expiresAt = 0; let messages = [];
+    let gateway = '';
+    try { const candidate = new URL(new URLSearchParams(globalThis.location?.search || '').get('gateway') || ''); if (candidate.protocol === 'https:' && !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(candidate.hostname)) gateway = candidate.origin; } catch {}
+    const request = async (path, body, authorization = '') => {
+      const response = await globalThis.fetch(`${gateway}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}) }, body: JSON.stringify(body) });
+      const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'Connection failed.'); return data;
+    };
     const render = (state) => {
       outlet.replaceChildren();
       const make = (tag, className, text) => { const node = document.createElement(tag); node.className = className; node.textContent = text; return node; };
@@ -64,12 +70,24 @@
         });
         outlet.append(menu); return;
       }
+      if (state.screen === 'chat') {
+        outlet.append(make('p', 'eyebrow', 'JARVIS AI'), make('h1', 'detail-title', 'AI CHAT'));
+        const status = make('p', 'status', token && expiresAt > Date.now() ? 'AI GATEWAY: PAIRED · SESSION MEMORY ONLY' : 'AI GATEWAY: NOT PAIRED · OFFLINE');
+        const log = make('div', 'chat-log', ''); messages.slice(-4).forEach(({ role, text }) => log.append(make('p', `chat-message ${role}`, `${role === 'user' ? 'YOU' : 'JARVIS'}: ${text}`))); outlet.append(status, log);
+        const gatewayInput = document.createElement('input'); gatewayInput.type = 'url'; gatewayInput.placeholder = 'HTTPS GATEWAY URL'; gatewayInput.value = gateway; gatewayInput.setAttribute('aria-label', 'Secure AI gateway URL');
+        const codeInput = document.createElement('input'); codeInput.type = 'password'; codeInput.placeholder = 'ONE-TIME PAIRING CODE'; codeInput.setAttribute('aria-label', 'One-time pairing code');
+        const pair = make('button', 'action', 'PAIR SECURE AI'); pair.type = 'button'; pair.addEventListener('click', async () => { try { const candidate = new URL(gatewayInput.value); gateway = candidate.protocol === 'https:' ? candidate.origin : ''; } catch { gateway = ''; } if (!gateway) { status.textContent = 'PAIRING: USE A PUBLIC HTTPS GATEWAY URL.'; return; } try { pair.disabled = true; const data = await request('/v1/pair', { code: codeInput.value }); token = data.accessToken; expiresAt = Number(data.expiresAt) || 0; codeInput.value = ''; status.textContent = 'AI GATEWAY: PAIRED · ENTER A MESSAGE.'; } catch { token = ''; status.textContent = 'PAIRING FAILED. CHECK THE CODE OR GATEWAY.'; } finally { pair.disabled = false; } });
+        const prompt = document.createElement('input'); prompt.type = 'text'; prompt.placeholder = 'ASK JARVIS'; prompt.maxLength = 1000; prompt.setAttribute('aria-label', 'Message for JARVIS');
+        const send = make('button', 'action', 'SEND'); send.type = 'button'; send.addEventListener('click', async () => { if (!token || expiresAt <= Date.now()) { status.textContent = 'PAIR SECURE AI FIRST.'; return; } const message = prompt.value.trim(); if (!message) return; messages.push({ role: 'user', text: message }); prompt.value = ''; status.textContent = 'JARVIS IS THINKING…'; send.disabled = true; try { const data = await request('/v1/chat', { message }, token); messages.push({ role: 'assistant', text: String(data.reply || '').slice(0, 2000) }); status.textContent = 'AI GATEWAY: PAIRED'; } catch { token = ''; status.textContent = 'CHAT UNAVAILABLE. SESSION CLEARED.'; } finally { send.disabled = false; render(hud.snapshot()); } });
+        outlet.append(gatewayInput, codeInput, pair, prompt, send, make('p', 'copy', 'Focus a field to use Neural Band handwriting, dictation, or the on-screen keyboard. Pairing code and session token remain in memory only.'));
+        const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
+      }
       const item = state.item;
       outlet.append(make('p', 'eyebrow', 'JARVIS MENU'), make('h1', 'detail-title', item.title), make('span', 'unavailable-label', 'UNAVAILABLE'), make('p', 'copy', item.detail), make('p', 'status', 'NO REQUEST WAS SENT · NO PERMISSION WAS REQUESTED'));
       const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); backButton.focus();
     };
     hud = createHud({ render });
-    document.addEventListener('keydown', (event) => hud.handleKey(event));
+    document.addEventListener('keydown', (event) => { if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) && !['Escape'].includes(event.key)) return; hud.handleKey(event); });
     globalThis.addEventListener?.('popstate', () => hud.back());
     if (globalThis.navigator?.serviceWorker) globalThis.navigator.serviceWorker.register('./service-worker.js').catch(() => {});
     hud.render();

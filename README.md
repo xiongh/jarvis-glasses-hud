@@ -1,6 +1,12 @@
 # JARVIS HUD for Meta Ray-Ban Display
 
-This is a separate, static, standalone Web App. It does not replace the desktop JARVIS simulator and it makes no request to the JARVIS server. The initial hardware test works with no backend connection.
+This is a separate Web App. It does not replace the desktop JARVIS simulator and it never calls a JARVIS desktop endpoint. The initial hardware test works with no backend connection.
+
+## Phase B AI chat
+
+The AI panel is usable after pairing with a separately deployed HTTPS gateway. The public HUD contains no gateway URL, pairing code, API key, provider credential, or persistent session. Entering a gateway URL and one-time pairing code in the HUD creates a short-lived in-memory session only; reload clears it. The gateway must be a separate service, never the Windows JARVIS server, and must expose only `/v1/pair` and `/v1/chat` with an exact Pages-origin CORS allowlist, short-lived authorization, rate limiting, and a server-side AI-provider key. `glasses-ai-gateway.js` is the reference implementation.
+
+Meta documents standard text fields for Neural Band handwriting, on-glasses dictation, and the on-screen keyboard. Focus the pairing or message field, enter text with one of those system methods, then use Select to activate the focused button. This is supported text entry, not raw Neural Band sensor access.
 
 ## Local preview
 
