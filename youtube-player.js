@@ -68,8 +68,8 @@
           videoId,
           playerVars: { autoplay: 0, playsinline: 1, rel: 0 },
           events: {
-            onReady: (event) => { if (!closed && event?.target === player) notify('ready', 'Video ready. Press Play to start.'); },
-            onError: () => { if (!closed) notify('error', 'YouTube could not embed this video. Use Open on YouTube instead.'); },
+            onReady: (event) => { if (!closed && event?.target === player) notify('ready', 'Player ready.'); },
+            onError: () => { if (!closed) notify('error', 'YouTube could not embed this video. Try another video.'); },
             onStateChange: (event) => {
               if (closed || event?.target !== player) return;
               const states = YT.PlayerState || {};
@@ -81,7 +81,7 @@
         });
         return true;
       } catch {
-        if (!closed) notify('error', 'The YouTube player could not load. Check your connection or open the video on YouTube.');
+        if (!closed) notify('error', 'The YouTube player could not load. Check your connection and try again.');
         return false;
       }
     }

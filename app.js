@@ -198,7 +198,7 @@
     let youtubeBackend = '';
     try { youtubeBackend = normalizeBackendOrigin(globalThis.localStorage?.getItem('jarvis.youtube.backend-origin') || '') || DEFAULT_YOUTUBE_WORKER_ORIGIN; } catch { youtubeBackend = DEFAULT_YOUTUBE_WORKER_ORIGIN; }
     const youtube = createYouTubeClient({ backendOrigin: youtubeBackend });
-    const youtubeState = { section: 'home', status: 'Not connected. Connect YouTube on your phone to enable account features.', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, currentIndex: -1, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null };
+    const youtubeState = { section: 'subscriptions', status: 'Not connected. Connect YouTube on your phone to enable account features.', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null };
     const youtubeRequestGate = createRequestGate();
     let youtubePlayer = null;
     let youtubeProgressTimer = null;
@@ -206,21 +206,20 @@
     let youtubePairTimer = null;
     let youtubePairCheckBusy = false;
     const clearYoutubeProgress = () => { if (youtubeProgressTimer) clearInterval(youtubeProgressTimer); youtubeProgressTimer = null; };
-    const youtubeVideoList = () => youtubeState.section === 'history' ? youtubeState.history : youtubeState.section === 'favorites' ? youtubeState.favorites : youtubeState.videos;
     const saveYoutubeProgress = async () => {
       if (!youtubePlayer?.active || !youtubeState.current || !youtubeRecordedStart) return;
       await youtube.record({ ...youtubeState.current, positionSeconds: youtubePlayer.position(), watchSeconds: youtubePlayer.position(), durationSeconds: youtubePlayer.duration(), incrementView: false, kind: youtubeState.current.kind === 'short' || youtubeState.section === 'shorts' ? 'short' : 'video' }).catch(() => {});
     };
-    const leaveYoutubePlayer = () => { clearYoutubeProgress(); void saveYoutubeProgress(); youtubePlayer?.close(); youtubePlayer = null; youtubeState.current = null; youtubeState.currentIndex = -1; youtubeRecordedStart = false; };
-    const openYoutubeVideo = (video, index = -1) => {
+    const leaveYoutubePlayer = () => { clearYoutubeProgress(); void saveYoutubeProgress(); youtubePlayer?.close(); youtubePlayer = null; youtubeState.current = null; youtubeRecordedStart = false; };
+    const openYoutubeVideo = (video) => {
       if (!video?.videoId || !/^[A-Za-z0-9_-]{11}$/.test(video.videoId)) return;
       clearYoutubeProgress(); void saveYoutubeProgress(); youtubePlayer?.close(); youtubePlayer = null;
       youtubeState.current = { ...video, kind: youtubeState.section === 'shorts' ? 'short' : video.kind };
-      youtubeState.currentIndex = index; youtubeState.resumeAt = Math.max(0, Number(video.positionSeconds) || 0); youtubeState.playerStatus = 'Loading the official embedded player…'; youtubeRecordedStart = false;
+      youtubeState.resumeAt = Math.max(0, Number(video.positionSeconds) || 0); youtubeState.playerStatus = 'Loading the official embedded player…'; youtubeRecordedStart = false;
       render(hud.snapshot());
       const shell = outlet.querySelector('#hud-youtube-player');
       const api = globalThis.jarvisYouTube;
-      if (!shell || !api?.createPlayerController) { youtubeState.playerStatus = 'Embedded playback is unavailable here. Open the video on your paired phone or in YouTube.'; const status = outlet.querySelector('#hud-youtube-player-status'); if (status) status.textContent = youtubeState.playerStatus; return; }
+      if (!shell || !api?.createPlayerController) { youtubeState.playerStatus = 'Embedded playback is unavailable in this browser.'; const status = outlet.querySelector('#hud-youtube-player-status'); if (status) status.textContent = youtubeState.playerStatus; return; }
       youtubePlayer = api.createPlayerController({ document, window: globalThis, container: shell, onStateChange: (event) => {
         youtubeState.playerStatus = event.detail || event.state;
         const status = outlet.querySelector('#hud-youtube-player-status'); if (status) status.textContent = youtubeState.playerStatus;
@@ -234,6 +233,7 @@
     };
     const loadYoutubeSection = async (section = youtubeState.section, append = false) => {
       if (!youtube.paired()) { youtubeRequestGate.cancel(); youtubeState.status = 'Pair first. Start pairing here, then sign in and approve the code on your iPhone.'; render(hud.snapshot()); return; }
+      if (youtubeState.current) leaveYoutubePlayer();
       const queryKey = section === 'home' ? '' : youtubeState.query.trim();
       const requestKey = `${section}|${queryKey}|${append ? youtubeState.pageToken : ''}`;
       const loadRequest = youtubeRequestGate.begin(requestKey);
@@ -253,7 +253,13 @@
           youtubeState.videos = append ? [...youtubeState.videos, ...newVideos.filter((video) => !youtubeState.videos.some((old) => old.videoId === video.videoId))] : newVideos;
           youtubeState.channels = append ? youtubeState.channels : (Array.isArray(data.channels) ? data.channels : []);
           youtubeState.pageToken = typeof data.nextPageToken === 'string' ? data.nextPageToken : '';
-          youtubeState.status = section === 'home' ? (data.message || 'Recent authorized YouTube account activity; not official watch history or YouTube recommendations.') : section === 'shorts' ? 'Search results matching #shorts; YouTube does not provide a complete Shorts feed through this API.' : `Search results for “${query}”.`;
+          youtubeState.status = section === 'home' ? (data.message || 'Recent authorized YouTube account activity; not official watch history or YouTube recommendations.') : section === 'shorts' ? 'Showing one embeddable result matching #shorts. This is not a complete official Shorts feed.' : `Search results for “${query}”.`;
+          if (section === 'shorts' && !append && newVideos.length) {
+            youtubeState.status = 'Opening one embeddable #shorts search result. This is not a complete official Shorts feed.';
+            loadRequest.finish();
+            openYoutubeVideo(newVideos[0]);
+            return;
+          }
         } else if (section === 'subscriptions') {
           const data = await youtube.subscriptions(youtubeState.pageToken, loadRequest.signal);
           if (!loadRequest.isCurrent()) return;
@@ -285,7 +291,7 @@
         if (youtubePairTimer) clearInterval(youtubePairTimer); youtubePairTimer = null;
         youtubeState.pairing = null;
         youtubeState.status = 'YouTube connected. Loading your account…';
-        await loadYoutubeSection('home');
+        await loadYoutubeSection('subscriptions');
       } catch (error) {
         if (youtubePairTimer) clearInterval(youtubePairTimer); youtubePairTimer = null;
         youtubeState.pairing = null;
@@ -333,7 +339,7 @@
         const accountControl = make('button', 'hud-youtube-account-control', connected ? 'CONNECTED' : 'NOT CONNECTED');
         accountControl.type = 'button'; accountControl.dataset.youtubeFocus = 'true'; accountControl.disabled = !connected;
         accountControl.setAttribute('aria-label', connected ? 'Connected YouTube account settings' : 'YouTube account not connected');
-        accountControl.addEventListener('click', () => void loadYoutubeSection(youtubeState.section === 'account' ? 'home' : 'account'));
+        accountControl.addEventListener('click', () => void loadYoutubeSection(youtubeState.section === 'account' ? 'subscriptions' : 'account'));
         youtubeHeader.append(youtubeBrand, accountControl);
         const status = make('p', 'status hud-youtube-status', youtubeState.status);
         const searchForm = document.createElement('form'); searchForm.className = 'hud-youtube-search';
@@ -343,16 +349,16 @@
         searchForm.addEventListener('submit', (event) => {
           event.preventDefault(); youtubeState.query = query.value.trim();
           if (!youtubeState.query || youtubeState.query.length > 100) { youtubeState.status = 'Enter a search of 1 to 100 characters.'; status.textContent = youtubeState.status; return; }
-          void loadYoutubeSection(youtubeState.section === 'shorts' ? 'shorts' : 'search');
+          void loadYoutubeSection('search');
         });
         searchForm.append(query, submit);
         const nav = make('nav', 'hud-youtube-nav', ''); nav.setAttribute('aria-label', 'YouTube sections');
-        for (const section of ['home', 'subscriptions', 'shorts']) {
-          const button = make('button', 'action hud-youtube-tab', section[0].toUpperCase() + section.slice(1));
+        for (const section of ['subscriptions', 'shorts']) {
+          const button = make('button', 'action hud-youtube-tab', section === 'subscriptions' ? 'SUBSCRIPTIONS' : 'SHORTS');
           button.type = 'button'; button.dataset.youtubeFocus = 'true'; button.disabled = !connected;
-          const activeSection = ['search', 'account', 'history', 'favorites'].includes(youtubeState.section) ? 'home' : youtubeState.section;
+          const activeSection = ['search', 'account', 'history', 'favorites'].includes(youtubeState.section) ? 'subscriptions' : youtubeState.section;
           button.setAttribute('aria-pressed', String(activeSection === section));
-          button.addEventListener('click', () => { if (youtubeState.current) leaveYoutubePlayer(); if (section === 'home') youtubeState.query = ''; void loadYoutubeSection(section); });
+          button.addEventListener('click', () => { youtubeState.query = ''; youtubeState.selectedChannel = null; void loadYoutubeSection(section); });
           nav.append(button);
         }
         outlet.append(youtubeHeader, status, searchForm, nav);
@@ -398,22 +404,11 @@
             const title = make('h2', 'hud-youtube-video-title', youtubeState.current.title || 'YouTube video'); outlet.append(title);
             const shell = make('div', `hud-youtube-player-shell${youtubeState.current.kind === 'short' ? ' is-short' : ''}`, ''); shell.id = 'hud-youtube-player'; shell.setAttribute('aria-label', 'YouTube embedded video player'); outlet.append(shell);
             const playerStatus = make('p', 'status hud-youtube-player-status', youtubeState.playerStatus); playerStatus.id = 'hud-youtube-player-status'; outlet.append(playerStatus);
-            const controls = make('div', 'hud-youtube-controls', '');
-            const play = make('button', 'action', 'PLAY / RESUME'); play.type = 'button'; play.dataset.youtubeFocus = 'true'; play.addEventListener('click', () => youtubePlayer?.play());
-            const pause = make('button', 'action', 'PAUSE'); pause.type = 'button'; pause.dataset.youtubeFocus = 'true'; pause.addEventListener('click', () => { youtubePlayer?.pause(); void saveYoutubeProgress(); });
-            const isFavorite = youtubeState.section === 'favorites' || youtubeState.favorites.some((item) => item.videoId === youtubeState.current.videoId);
-            const favorite = make('button', 'action', isFavorite ? 'REMOVE FAVORITE' : 'SAVE TO FAVORITES'); favorite.type = 'button'; favorite.dataset.youtubeFocus = 'true'; favorite.addEventListener('click', async () => { try { if (isFavorite) { await youtube.removeFavorite(youtubeState.current.videoId); if (youtubeState.section === 'favorites') { await loadYoutubeSection('favorites'); return; } youtubeState.favorites = youtubeState.favorites.filter((item) => item.videoId !== youtubeState.current.videoId); youtubeState.status = 'Video removed from JARVIS favorites.'; } else { await youtube.saveFavorite({ videoId: youtubeState.current.videoId, kind: youtubeState.current.kind === 'short' ? 'short' : 'video' }); youtubeState.status = 'Video saved to this account’s JARVIS favorites.'; } status.textContent = youtubeState.status; } catch (error) { youtubeState.status = error.message || 'Could not update favorites.'; status.textContent = youtubeState.status; } });
-            const videoList = youtubeVideoList();
-            const previous = make('button', 'action', 'PREVIOUS'); previous.type = 'button'; previous.dataset.youtubeFocus = 'true'; previous.disabled = youtubeState.currentIndex <= 0; previous.addEventListener('click', () => { const item = videoList[youtubeState.currentIndex - 1]; if (item) openYoutubeVideo(item, youtubeState.currentIndex - 1); });
-            const next = make('button', 'action', 'NEXT'); next.type = 'button'; next.dataset.youtubeFocus = 'true'; next.disabled = youtubeState.currentIndex < 0 || youtubeState.currentIndex >= videoList.length - 1; next.addEventListener('click', () => { const item = videoList[youtubeState.currentIndex + 1]; if (item) openYoutubeVideo(item, youtubeState.currentIndex + 1); });
-            const volume = document.createElement('input'); volume.type = 'range'; volume.min = '0'; volume.max = '100'; volume.value = '60'; volume.setAttribute('aria-label', 'YouTube player volume'); volume.dataset.youtubeFocus = 'true'; volume.addEventListener('input', () => youtubePlayer?.setVolume(volume.value));
-            controls.append(play, pause, favorite, previous, next, volume); outlet.append(controls);
-            const handoff = document.createElement('a'); handoff.className = 'action hud-youtube-handoff'; handoff.href = `https://www.youtube.com/watch?v=${encodeURIComponent(youtubeState.current.videoId)}`; handoff.target = '_blank'; handoff.rel = 'noopener noreferrer'; handoff.textContent = 'OPEN VIDEO ON PHONE / YOUTUBE'; handoff.dataset.youtubeFocus = 'true'; outlet.append(handoff);
-            const back = make('button', 'action', 'BACK TO RESULTS'); back.type = 'button'; back.dataset.youtubeFocus = 'true'; back.addEventListener('click', () => { leaveYoutubePlayer(); render(hud.snapshot()); }); outlet.append(back);
+            // Playback controls remain inside YouTube's official embedded player.
           } else {
             const results = make('div', 'hud-youtube-results', ''); results.setAttribute('aria-live', 'polite');
-            const videos = youtubeVideoList();
-            videos.slice(0, 16).forEach((video, index) => {
+            const videos = youtubeState.section === 'shorts' ? [] : youtubeState.section === 'history' ? youtubeState.history : youtubeState.section === 'favorites' ? youtubeState.favorites : youtubeState.videos;
+            videos.forEach((video) => {
               const button = make('button', 'hud-youtube-result', ''); button.type = 'button'; button.dataset.youtubeFocus = 'true';
               let imageUrl = ''; try { const candidate = new URL(video.thumbnail || ''); if (candidate.protocol === 'https:' && ['i.ytimg.com', 'img.youtube.com'].includes(candidate.hostname)) imageUrl = candidate.href; } catch {}
               if (imageUrl) { const img = document.createElement('img'); img.src = imageUrl; img.alt = ''; img.loading = 'lazy'; button.append(img); }
@@ -421,15 +416,15 @@
               text.append(make('strong', 'hud-youtube-result-title', video.title || 'YouTube video'), make('small', 'hud-youtube-result-channel', video.channel || 'YouTube'));
               button.append(text);
               if (youtubeState.section === 'history' && Number(video.positionSeconds) > 0) { const resume = make('small', '', `Resume at ${Math.floor(video.positionSeconds)} seconds`); button.append(resume); }
-              button.addEventListener('click', () => openYoutubeVideo(video, index)); results.append(button);
+              button.addEventListener('click', () => openYoutubeVideo(video)); results.append(button);
             });
             if (youtubeState.section === 'subscriptions') {
-              youtubeState.subscriptions.forEach((channel) => { const button = make('button', 'hud-youtube-result', channel.title || 'Subscribed channel'); button.type = 'button'; button.dataset.youtubeFocus = 'true'; button.addEventListener('click', async () => { youtubeState.status = `Loading recent uploads from ${channel.title}…`; status.textContent = youtubeState.status; try { const data = await youtube.subscriptionVideos(channel.channelId); youtubeState.videos = (data.videos || []).map((item) => ({ ...item, kind: 'video' })); youtubeState.status = `Recent embeddable uploads from ${channel.title}.`; render(hud.snapshot()); } catch (error) { youtubeState.status = error.message; status.textContent = youtubeState.status; } }); results.append(button); });
+              youtubeState.subscriptions.forEach((channel) => { const button = make('button', 'hud-youtube-result hud-youtube-channel', ''); button.type = 'button'; button.dataset.youtubeFocus = 'true'; const image = channel.thumbnail; let avatarUrl = ''; try { const candidate = new URL(image || ''); if (candidate.protocol === 'https:' && ['yt3.ggpht.com', 'yt3.googleusercontent.com'].includes(candidate.hostname)) avatarUrl = candidate.href; } catch {} if (avatarUrl) { const avatar = document.createElement('img'); avatar.src = avatarUrl; avatar.alt = ''; avatar.loading = 'lazy'; button.append(avatar); } const copy = make('span', 'hud-youtube-result-copy', ''); copy.append(make('strong', 'hud-youtube-result-title', channel.title || 'Subscribed channel'), make('small', 'hud-youtube-result-channel', 'CHANNEL · SELECT FOR RECENT VIDEOS')); button.append(copy); button.addEventListener('click', async () => { youtubeState.status = `Loading recent uploads from ${channel.title}…`; status.textContent = youtubeState.status; try { const data = await youtube.subscriptionVideos(channel.channelId); youtubeState.videos = (data.videos || []).map((item) => ({ ...item, kind: 'video' })); youtubeState.selectedChannel = channel; youtubeState.status = youtubeState.videos.length ? `Recent embeddable uploads from ${channel.title}.` : `No recent embeddable uploads from ${channel.title}.`; render(hud.snapshot()); } catch (error) { youtubeState.status = error.message || 'Could not load this channel’s videos.'; status.textContent = youtubeState.status; } }); results.append(button); });
             }
             youtubeState.channels.forEach((channel) => { const link = document.createElement('a'); link.className = 'action hud-youtube-handoff'; link.href = `https://www.youtube.com/channel/${encodeURIComponent(channel.channelId)}`; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `OPEN CHANNEL: ${channel.title}`; link.dataset.youtubeFocus = 'true'; results.append(link); });
-            if (!videos.length && !youtubeState.subscriptions.length && !youtubeState.channels.length) results.append(make('p', 'copy', 'No items loaded. Select a section or search to browse.'));
+            if (!videos.length && !youtubeState.subscriptions.length && !youtubeState.channels.length) results.append(make('p', 'copy', youtubeState.section === 'shorts' ? 'No embeddable #shorts search result was found. Try another search.' : youtubeState.section === 'subscriptions' ? 'No subscribed channels were returned. Check account authorization or try again.' : 'No videos found. Try another search.'));
             outlet.append(results);
-            if (youtubeState.pageToken && ['home', 'search', 'shorts', 'subscriptions'].includes(youtubeState.section)) { const more = make('button', 'action', 'LOAD MORE'); more.type = 'button'; more.dataset.youtubeFocus = 'true'; more.addEventListener('click', () => { if (youtubeState.section === 'subscriptions') void (async () => { try { const data = await youtube.subscriptions(youtubeState.pageToken); youtubeState.subscriptions.push(...(data.subscriptions || []).filter((channel) => !youtubeState.subscriptions.some((old) => old.channelId === channel.channelId))); youtubeState.pageToken = data.nextPageToken || ''; youtubeState.status = 'More subscribed channels loaded.'; render(hud.snapshot()); } catch (error) { youtubeState.status = error.message; status.textContent = youtubeState.status; } })(); else void loadYoutubeSection(youtubeState.section, true); }); outlet.append(more); }
+            if (youtubeState.pageToken && ['search', 'subscriptions'].includes(youtubeState.section)) { const more = make('button', 'action', youtubeState.section === 'subscriptions' ? 'LOAD MORE CHANNELS' : 'LOAD MORE VIDEOS'); more.type = 'button'; more.dataset.youtubeFocus = 'true'; more.addEventListener('click', () => void loadYoutubeSection(youtubeState.section, true)); outlet.append(more); }
           }
         }
         const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.dataset.youtubeFocus = 'true'; backButton.addEventListener('click', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); }); outlet.append(backButton);
