@@ -54,7 +54,7 @@
       paired: () => Boolean(deviceCredential && expiresAt > now()),
       clear: () => { deviceCredential = ''; expiresAt = 0; pairing = null; },
       probe,
-      startPairing: async () => { const value = await request('/v1/pairings', { method: 'POST', body: {}, anonymous: true }); let connectUrl; try { connectUrl = new URL(value.connectUrl); } catch {} if (typeof value.pairingId !== 'string' || typeof value.pollSecret !== 'string' || !/^\d{8}$/.test(value.userCode || '') || !connectUrl || connectUrl.protocol !== 'https:' || connectUrl.origin !== base || connectUrl.pathname !== '/connect' || connectUrl.search || connectUrl.hash) throw new Error('The YouTube service returned an invalid pairing request.'); pairing = value; return { userCode: value.userCode, expiresAt: value.expiresAt, connectUrl: connectUrl.href }; },
+      startPairing: async () => { const value = await request('/v1/pairings', { method: 'POST', body: {}, anonymous: true }); let connectUrl; try { connectUrl = new URL(value.connectUrl); } catch {} if (typeof value.pairingId !== 'string' || typeof value.pollSecret !== 'string' || !/^\d{8}$/.test(value.userCode || '') || !connectUrl || connectUrl.protocol !== 'https:' || connectUrl.origin !== base || connectUrl.pathname !== '/connect' || connectUrl.search || connectUrl.hash !== `#pair=${value.userCode}`) throw new Error('The YouTube service returned an invalid pairing request.'); pairing = value; return { userCode: value.userCode, expiresAt: value.expiresAt, connectUrl: connectUrl.href }; },
       checkPairing: async () => { if (!pairing) throw new Error('Start a new pairing request on the glasses first.'); const value = await request('/v1/pairings/poll', { method: 'POST', body: { pairingId: pairing.pairingId, pollSecret: pairing.pollSecret }, anonymous: true }); if (value.status === 'pending') return { paired: false }; if (value.status !== 'paired' || typeof value.accessToken !== 'string' || !Number.isFinite(Number(value.expiresAt)) || Number(value.expiresAt) <= now()) throw new Error('The YouTube service returned an invalid device session.'); deviceCredential = value.accessToken; expiresAt = Number(value.expiresAt); pairing = null; return { paired: true, expiresAt }; },
       home: () => request(`${YOUTUBE_API_PREFIX}/home`),
       search: (query, pageToken = '') => request(`${YOUTUBE_API_PREFIX}/search?q=${encodeURIComponent(query)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`),
@@ -184,6 +184,8 @@
     let youtubePlayer = null;
     let youtubeProgressTimer = null;
     let youtubeRecordedStart = false;
+    let youtubePairTimer = null;
+    let youtubePairCheckBusy = false;
     const clearYoutubeProgress = () => { if (youtubeProgressTimer) clearInterval(youtubeProgressTimer); youtubeProgressTimer = null; };
     const youtubeVideoList = () => youtubeState.section === 'history' ? youtubeState.history : youtubeState.section === 'favorites' ? youtubeState.favorites : youtubeState.videos;
     const saveYoutubeProgress = async () => {
@@ -247,6 +249,23 @@
       } catch (error) { youtubeState.status = error.message || 'YouTube is temporarily unavailable. Try again.'; }
       render(hud.snapshot());
     };
+    const checkYoutubePairing = async () => {
+      if (youtubePairCheckBusy || !youtubeState.pairing) return;
+      youtubePairCheckBusy = true;
+      try {
+        const result = await youtube.checkPairing();
+        if (!result.paired) return;
+        if (youtubePairTimer) clearInterval(youtubePairTimer); youtubePairTimer = null;
+        youtubeState.pairing = null;
+        youtubeState.status = 'YouTube connected. Loading your account…';
+        await loadYoutubeSection('home');
+      } catch (error) {
+        if (youtubePairTimer) clearInterval(youtubePairTimer); youtubePairTimer = null;
+        youtubeState.pairing = null;
+        youtubeState.status = error.message || 'Pairing expired or failed. Start a new request.';
+        render(hud.snapshot());
+      } finally { youtubePairCheckBusy = false; }
+    };
     const render = (state) => {
       outlet.classList?.toggle('youtube-mode', state.screen === 'youtube');
       outlet.replaceChildren();
@@ -284,23 +303,25 @@
         const accountStatus = make('p', 'copy hud-youtube-account-status', youtube.paired() ? 'Account Status: Connected' : 'Account Status: Not connected'); outlet.append(accountStatus);
         if (!youtube.paired()) {
           const pair = make('button', 'action', 'CONNECT YOUTUBE'); pair.type = 'button'; pair.dataset.youtubeFocus = 'true'; pair.addEventListener('click', async () => {
+            // Open a phone/browser tab during the user gesture so iOS Safari does
+            // not block the later pairing handoff as an unsolicited popup.
+            let phoneWindow = null; try { phoneWindow = globalThis.open?.('about:blank', '_blank'); if (phoneWindow) phoneWindow.opener = null; } catch {}
             pair.disabled = true; youtubeState.status = 'Creating a short-lived pairing code…'; status.textContent = youtubeState.status;
             try {
-              const pairing = await youtube.startPairing(); youtubeState.pairing = pairing; youtubeState.status = 'Enter the code on your iPhone and approve it before it expires.'; render(hud.snapshot());
+              const pairing = await youtube.startPairing(); youtubeState.pairing = pairing;
+              if (phoneWindow) { try { phoneWindow.location.replace(pairing.connectUrl); } catch { phoneWindow.close?.(); phoneWindow = null; } }
+              youtubeState.status = 'Continue on your phone to authorize YouTube. This one-time link expires in five minutes.'; render(hud.snapshot());
+              if (youtubePairTimer) clearInterval(youtubePairTimer);
+              youtubePairTimer = setInterval(() => { void checkYoutubePairing(); }, 2_500);
             } catch (error) { youtubeState.status = error.message || 'Could not create a pairing request. Check the HTTPS Worker origin.'; status.textContent = youtubeState.status; }
             finally { pair.disabled = false; }
           });
-          outlet.append(pair, make('p', 'copy hud-youtube-help', 'Connect on your iPhone, then approve the one-time code shown here.'));
+          outlet.append(pair, make('p', 'copy hud-youtube-help', 'Authorize on your phone. The short-lived link is bound to this one-time glasses pairing.'));
           if (youtubeState.pairing) {
             const codeDisplay = make('h2', 'hud-youtube-pair-code', youtubeState.pairing.userCode); codeDisplay.setAttribute('aria-label', 'One-time phone approval code');
-            const help = make('p', 'copy hud-youtube-help', 'On your iPhone, open the phone connection link, sign in, and enter this code.');
-            const servicePage = make('a', 'action hud-youtube-handoff', 'OPEN PHONE CONNECTION PAGE'); servicePage.href = youtubeState.pairing.connectUrl; servicePage.target = '_blank'; servicePage.rel = 'noopener noreferrer'; servicePage.dataset.youtubeFocus = 'true';
-            const check = make('button', 'action', 'CHECK PHONE APPROVAL'); check.type = 'button'; check.dataset.youtubeFocus = 'true'; check.addEventListener('click', async () => {
-              check.disabled = true;
-              try { const result = await youtube.checkPairing(); if (!result.paired) { youtubeState.status = 'Waiting for approval on your iPhone. The code expires in five minutes.'; status.textContent = youtubeState.status; return; } youtubeState.pairing = null; youtubeState.status = 'Glasses paired. The device credential stays in memory and expires automatically.'; await loadYoutubeSection('home'); }
-              catch (error) { youtubeState.pairing = null; youtubeState.status = error.message || 'Pairing expired or failed. Start a new request.'; status.textContent = youtubeState.status; }
-              finally { check.disabled = false; }
-            });
+            const help = make('p', 'copy hud-youtube-help', 'If the phone page did not open, scan or open this one-time link. Google sign-in and approval continue automatically.');
+            const servicePage = make('a', 'action hud-youtube-handoff', 'OPEN PHONE SIGN-IN'); servicePage.href = youtubeState.pairing.connectUrl; servicePage.target = '_blank'; servicePage.rel = 'noopener noreferrer'; servicePage.dataset.youtubeFocus = 'true';
+            const check = make('button', 'action', 'CHECK PHONE APPROVAL'); check.type = 'button'; check.dataset.youtubeFocus = 'true'; check.addEventListener('click', () => { void checkYoutubePairing(); });
             outlet.append(codeDisplay, help, servicePage, check);
           }
         } else {
