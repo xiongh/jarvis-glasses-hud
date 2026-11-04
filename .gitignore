@@ -1,0 +1,10 @@
+# This directory becomes the root of the future public repository.
+# Keep private configuration and local tooling out of that repository.
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+node_modules/
+*.log
+.DS_Store

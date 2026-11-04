@@ -1,0 +1,9 @@
+{
+  "name": "JARVIS HUD",
+  "short_name": "JARVIS",
+  "description": "Standalone JARVIS HUD for Meta Ray-Ban Display.",
+  "start_url": "./",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#000000"
+}
