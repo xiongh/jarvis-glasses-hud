@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Known-good commit SHA to deploy (leave empty for this workflow commit)'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -21,14 +26,32 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
+      - name: Validate optional rollback revision
+        env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
+        run: |
+          if [[ -n "$REQUESTED_REVISION" && ! "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Rollback revision must be a 40-character lowercase commit SHA.' >&2
+            exit 1
+          fi
       - name: Check out standalone HUD
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.revision || github.sha }}
       - name: Configure Pages
         uses: actions/configure-pages@v5
+      - name: Prepare verified release artifact
+        run: |
+          RELEASE_ID="$(git rev-parse HEAD)"
+          node scripts/prepare-release.cjs --source . --output .site --build "$RELEASE_ID"
       - name: Upload static HUD only
         uses: actions/upload-pages-artifact@v4
         with:
-          path: .
+          path: .site
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Verify deployed release health and hashes
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: node scripts/verify-deployment.cjs --url "$PAGE_URL" --build "$(git rev-parse HEAD)"

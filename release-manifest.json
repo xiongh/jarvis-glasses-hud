@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "app": "JARVIS HUD",
+  "buildId": "local",
+  "files": {
+    "app.js": "fd533b977282eba1f57e37baefa16c1c1d4b983b14b089efcd006c7803bdad5b",
+    "index.html": "272a349b0d2326a640bdb6cba0313f174b1dfb13dc9e253ade99b57e3aac3cc0",
+    "manifest.webmanifest": "529b6ff02684852f51a522eb14fe4c92187a6581621186d7717034c513bdeab7",
+    "service-worker.js": "a2650725ed94f44bd67ea5e41b3be0f468774c1ba3b2e8c0db525f48c4572d7e",
+    "styles.css": "b73058ca2729d4fb1c07e1d4984782252ad3e6052cac8ea32c91840755832c31",
+    "youtube-player.js": "acf0c812ed6dfb7764f6100f4e09b49de84b63472d4958cdd4767b3b130f973c"
+  }
+}
