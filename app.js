@@ -20,16 +20,34 @@
     } catch { return ''; }
   }
 
+  function createRequestGate({ AbortControllerImpl = globalThis.AbortController } = {}) {
+    let generation = 0;
+    let activeKey = '';
+    let controller = null;
+    return {
+      begin(key) {
+        const requestKey = String(key || '');
+        if (controller && !controller.signal.aborted && requestKey === activeKey) return null;
+        controller?.abort();
+        const id = ++generation;
+        controller = new AbortControllerImpl();
+        activeKey = requestKey;
+        return { id, signal: controller.signal, isCurrent: () => id === generation, finish: () => { if (id === generation) { controller = null; activeKey = ''; } } };
+      },
+      cancel() { controller?.abort(); controller = null; activeKey = ''; generation += 1; },
+    };
+  }
+
   function createYouTubeClient({ fetchImpl = globalThis.fetch, backendOrigin = DEFAULT_YOUTUBE_WORKER_ORIGIN, now = Date.now } = {}) {
     let base = normalizeBackendOrigin(backendOrigin) || DEFAULT_YOUTUBE_WORKER_ORIGIN;
     let deviceCredential = '';
     let expiresAt = 0;
     let pairing = null;
     const setBackendOrigin = (value) => { base = normalizeBackendOrigin(value); return base; };
-    const request = async (path, { method = 'GET', body, anonymous = false } = {}) => {
+    const request = async (path, { method = 'GET', body, anonymous = false, signal } = {}) => {
       if (!base) throw new Error('Set the HTTPS JARVIS YouTube Worker origin first.');
       if (!anonymous && (!deviceCredential || expiresAt <= now())) { deviceCredential = ''; expiresAt = 0; throw new Error('Glasses session expired or was revoked. Pair again from the phone connection page.'); }
-      const response = await fetchImpl(`${base}${path}`, { method, mode: 'cors', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { Accept: 'application/json', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(!anonymous ? { Authorization: `Bearer ${deviceCredential}` } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+      const response = await fetchImpl(`${base}${path}`, { method, mode: 'cors', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { Accept: 'application/json', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(!anonymous ? { Authorization: `Bearer ${deviceCredential}` } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), ...(signal ? { signal } : {}) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 401 && !anonymous) { deviceCredential = ''; expiresAt = 0; }
@@ -56,15 +74,15 @@
       probe,
       startPairing: async () => { const value = await request('/v1/pairings', { method: 'POST', body: {}, anonymous: true }); let connectUrl; try { connectUrl = new URL(value.connectUrl); } catch {} if (typeof value.pairingId !== 'string' || typeof value.pollSecret !== 'string' || !/^\d{8}$/.test(value.userCode || '') || !connectUrl || connectUrl.protocol !== 'https:' || connectUrl.origin !== base || connectUrl.pathname !== '/connect' || connectUrl.search || connectUrl.hash !== `#pair=${value.userCode}`) throw new Error('The YouTube service returned an invalid pairing request.'); pairing = value; return { userCode: value.userCode, expiresAt: value.expiresAt, connectUrl: connectUrl.href }; },
       checkPairing: async () => { if (!pairing) throw new Error('Start a new pairing request on the glasses first.'); const value = await request('/v1/pairings/poll', { method: 'POST', body: { pairingId: pairing.pairingId, pollSecret: pairing.pollSecret }, anonymous: true }); if (value.status === 'pending') return { paired: false }; if (value.status !== 'paired' || typeof value.accessToken !== 'string' || !Number.isFinite(Number(value.expiresAt)) || Number(value.expiresAt) <= now()) throw new Error('The YouTube service returned an invalid device session.'); deviceCredential = value.accessToken; expiresAt = Number(value.expiresAt); pairing = null; return { paired: true, expiresAt }; },
-      home: () => request(`${YOUTUBE_API_PREFIX}/home`),
-      search: (query, pageToken = '') => request(`${YOUTUBE_API_PREFIX}/search?q=${encodeURIComponent(query)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`),
-      account: () => request(`${YOUTUBE_API_PREFIX}/account`),
-      subscriptions: (pageToken = '') => request(`${YOUTUBE_API_PREFIX}/subscriptions${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ''}`),
-      subscriptionVideos: (channelId) => request(`${YOUTUBE_API_PREFIX}/subscriptions/videos?channelId=${encodeURIComponent(channelId)}`),
-      history: () => request(`${YOUTUBE_API_PREFIX}/history`),
+      home: (pageToken = '', signal) => request(`${YOUTUBE_API_PREFIX}/home${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ''}`, { signal }),
+      search: (query, pageToken = '', signal) => request(`${YOUTUBE_API_PREFIX}/search?q=${encodeURIComponent(query)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, { signal }),
+      account: (signal) => request(`${YOUTUBE_API_PREFIX}/account`, { signal }),
+      subscriptions: (pageToken = '', signal) => request(`${YOUTUBE_API_PREFIX}/subscriptions${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ''}`, { signal }),
+      subscriptionVideos: (channelId, signal) => request(`${YOUTUBE_API_PREFIX}/subscriptions/videos?channelId=${encodeURIComponent(channelId)}`, { signal }),
+      history: (signal) => request(`${YOUTUBE_API_PREFIX}/history`, { signal }),
       record: (item) => request(`${YOUTUBE_API_PREFIX}/history`, { method: 'POST', body: item }),
       recordSearch: async () => null,
-      favorites: () => request(`${YOUTUBE_API_PREFIX}/favorites`),
+      favorites: (signal) => request(`${YOUTUBE_API_PREFIX}/favorites`, { signal }),
       saveFavorite: (item) => request(`${YOUTUBE_API_PREFIX}/favorites`, { method: 'POST', body: item }),
       removeFavorite: (id) => request(`${YOUTUBE_API_PREFIX}/favorites?videoId=${encodeURIComponent(id)}`, { method: 'DELETE' }),
     };
@@ -181,6 +199,7 @@
     try { youtubeBackend = normalizeBackendOrigin(globalThis.localStorage?.getItem('jarvis.youtube.backend-origin') || '') || DEFAULT_YOUTUBE_WORKER_ORIGIN; } catch { youtubeBackend = DEFAULT_YOUTUBE_WORKER_ORIGIN; }
     const youtube = createYouTubeClient({ backendOrigin: youtubeBackend });
     const youtubeState = { section: 'home', status: 'Not connected. Connect YouTube on your phone to enable account features.', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, currentIndex: -1, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null };
+    const youtubeRequestGate = createRequestGate();
     let youtubePlayer = null;
     let youtubeProgressTimer = null;
     let youtubeRecordedStart = false;
@@ -214,7 +233,11 @@
       void youtubePlayer.load(video.videoId);
     };
     const loadYoutubeSection = async (section = youtubeState.section, append = false) => {
-      if (!youtube.paired()) { youtubeState.status = 'Pair first. Start pairing here, then sign in and approve the code on your iPhone.'; render(hud.snapshot()); return; }
+      if (!youtube.paired()) { youtubeRequestGate.cancel(); youtubeState.status = 'Pair first. Start pairing here, then sign in and approve the code on your iPhone.'; render(hud.snapshot()); return; }
+      const queryKey = section === 'home' ? '' : youtubeState.query.trim();
+      const requestKey = `${section}|${queryKey}|${append ? youtubeState.pageToken : ''}`;
+      const loadRequest = youtubeRequestGate.begin(requestKey);
+      if (!loadRequest) return;
       youtubeState.section = section; youtubeState.status = section === 'shorts' ? 'Searching embeddable videos matching #shorts. This is not an official Shorts feed.' : 'Loading YouTube…';
       if (!append) { youtubeState.videos = []; youtubeState.channels = []; youtubeState.subscriptions = []; youtubeState.history = []; youtubeState.pageToken = ''; }
       render(hud.snapshot());
@@ -224,29 +247,33 @@
           if (section !== 'home' && !query) throw new Error('Enter a search query.');
           if (section === 'search' || section === 'shorts') await youtube.recordSearch(query).catch(() => {});
           const searchQuery = section === 'shorts' ? `${query} #shorts` : query;
-          const data = section === 'home' ? await youtube.home(youtubeState.pageToken) : await youtube.search(searchQuery, youtubeState.pageToken);
+          const data = section === 'home' ? await youtube.home(youtubeState.pageToken, loadRequest.signal) : await youtube.search(searchQuery, youtubeState.pageToken, loadRequest.signal);
+          if (!loadRequest.isCurrent()) return;
           const newVideos = Array.isArray(data.videos) ? data.videos : [];
           youtubeState.videos = append ? [...youtubeState.videos, ...newVideos.filter((video) => !youtubeState.videos.some((old) => old.videoId === video.videoId))] : newVideos;
           youtubeState.channels = append ? youtubeState.channels : (Array.isArray(data.channels) ? data.channels : []);
           youtubeState.pageToken = typeof data.nextPageToken === 'string' ? data.nextPageToken : '';
           youtubeState.status = section === 'home' ? (data.message || 'Recent authorized YouTube account activity; not official watch history or YouTube recommendations.') : section === 'shorts' ? 'Search results matching #shorts; YouTube does not provide a complete Shorts feed through this API.' : `Search results for “${query}”.`;
         } else if (section === 'subscriptions') {
-          const data = await youtube.subscriptions(youtubeState.pageToken);
+          const data = await youtube.subscriptions(youtubeState.pageToken, loadRequest.signal);
+          if (!loadRequest.isCurrent()) return;
           const newChannels = Array.isArray(data.subscriptions) ? data.subscriptions : [];
           youtubeState.subscriptions = append ? [...youtubeState.subscriptions, ...newChannels.filter((channel) => !youtubeState.subscriptions.some((old) => old.channelId === channel.channelId))] : newChannels;
           youtubeState.pageToken = typeof data.nextPageToken === 'string' ? data.nextPageToken : '';
           youtubeState.status = 'Channels authorized by the connected YouTube account.';
         } else if (section === 'history') {
-          const data = await youtube.history(); youtubeState.history = Array.isArray(data.items) ? data.items : [];
+          const data = await youtube.history(loadRequest.signal); if (!loadRequest.isCurrent()) return; youtubeState.history = Array.isArray(data.items) ? data.items : [];
           youtubeState.status = data.disclaimer || 'JARVIS watch history only; this is not YouTube’s official watch history.';
         } else if (section === 'favorites') {
-          const data = await youtube.favorites(); youtubeState.favorites = Array.isArray(data.items) ? data.items : [];
+          const data = await youtube.favorites(loadRequest.signal); if (!loadRequest.isCurrent()) return; youtubeState.favorites = Array.isArray(data.items) ? data.items : [];
           youtubeState.status = 'Saved videos for this connected Google account.';
         } else if (section === 'account') {
-          const data = await youtube.account(); youtubeState.status = data.connected ? `Connected as ${data.email || 'Google account'}. Manage access and devices on your iPhone.` : 'Connect a Google account on the iPhone connection page.';
+          const data = await youtube.account(loadRequest.signal); if (!loadRequest.isCurrent()) return; youtubeState.status = data.connected ? `Connected as ${data.email || 'Google account'}. Manage access and devices on your iPhone.` : 'Connect a Google account on the iPhone connection page.';
           youtubeState.account = data.connected ? { email: data.email } : null;
         }
-      } catch (error) { youtubeState.status = error.message || 'YouTube is temporarily unavailable. Try again.'; }
+      } catch (error) { if (!loadRequest.isCurrent() || error?.name === 'AbortError') return; youtubeState.status = error.message || 'YouTube is temporarily unavailable. Try again.'; }
+      finally { loadRequest.finish(); }
+      if (!loadRequest.isCurrent()) return;
       render(hud.snapshot());
     };
     const checkYoutubePairing = async () => {
@@ -298,9 +325,37 @@
         const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
       }
       if (state.screen === 'youtube') {
-        outlet.append(make('p', 'eyebrow', 'JARVIS MEDIA'), make('h1', 'detail-title', 'YOUTUBE'));
-        const status = make('p', 'status hud-youtube-status', youtubeState.status); outlet.append(status);
-        const accountStatus = make('p', 'copy hud-youtube-account-status', youtube.paired() ? 'Account Status: Connected' : 'Account Status: Not connected'); outlet.append(accountStatus);
+        const connected = youtube.paired();
+        const youtubeHeader = make('header', 'hud-youtube-header', '');
+        const youtubeBrand = make('div', 'hud-youtube-brand', '');
+        const youtubeMark = make('span', 'hud-youtube-mark', '▶'); youtubeMark.setAttribute('aria-hidden', 'true');
+        youtubeBrand.append(youtubeMark, make('h1', 'hud-youtube-title', 'YouTube'));
+        const accountControl = make('button', 'hud-youtube-account-control', connected ? 'CONNECTED' : 'NOT CONNECTED');
+        accountControl.type = 'button'; accountControl.dataset.youtubeFocus = 'true'; accountControl.disabled = !connected;
+        accountControl.setAttribute('aria-label', connected ? 'Connected YouTube account settings' : 'YouTube account not connected');
+        accountControl.addEventListener('click', () => void loadYoutubeSection(youtubeState.section === 'account' ? 'home' : 'account'));
+        youtubeHeader.append(youtubeBrand, accountControl);
+        const status = make('p', 'status hud-youtube-status', youtubeState.status);
+        const searchForm = document.createElement('form'); searchForm.className = 'hud-youtube-search';
+        const query = document.createElement('input'); query.type = 'search'; query.maxLength = 100; query.value = youtubeState.query;
+        query.placeholder = connected ? 'Search videos, channels, or topics' : 'Connect to search YouTube'; query.setAttribute('aria-label', 'Search YouTube'); query.dataset.youtubeFocus = 'true'; query.disabled = !connected;
+        const submit = make('button', 'action hud-youtube-search-button', 'SEARCH'); submit.type = 'submit'; submit.dataset.youtubeFocus = 'true'; submit.disabled = !connected;
+        searchForm.addEventListener('submit', (event) => {
+          event.preventDefault(); youtubeState.query = query.value.trim();
+          if (!youtubeState.query || youtubeState.query.length > 100) { youtubeState.status = 'Enter a search of 1 to 100 characters.'; status.textContent = youtubeState.status; return; }
+          void loadYoutubeSection(youtubeState.section === 'shorts' ? 'shorts' : 'search');
+        });
+        searchForm.append(query, submit);
+        const nav = make('nav', 'hud-youtube-nav', ''); nav.setAttribute('aria-label', 'YouTube sections');
+        for (const section of ['home', 'subscriptions', 'shorts']) {
+          const button = make('button', 'action hud-youtube-tab', section[0].toUpperCase() + section.slice(1));
+          button.type = 'button'; button.dataset.youtubeFocus = 'true'; button.disabled = !connected;
+          const activeSection = ['search', 'account', 'history', 'favorites'].includes(youtubeState.section) ? 'home' : youtubeState.section;
+          button.setAttribute('aria-pressed', String(activeSection === section));
+          button.addEventListener('click', () => { if (youtubeState.current) leaveYoutubePlayer(); if (section === 'home') youtubeState.query = ''; void loadYoutubeSection(section); });
+          nav.append(button);
+        }
+        outlet.append(youtubeHeader, status, searchForm, nav);
         if (!youtube.paired()) {
           const pair = make('button', 'action', 'CONNECT YOUTUBE'); pair.type = 'button'; pair.dataset.youtubeFocus = 'true'; pair.addEventListener('click', async () => {
             // Open a phone/browser tab during the user gesture so iOS Safari does
@@ -332,17 +387,14 @@
             outlet.append(codeDisplay, help, servicePage, sharePhoneLink, check);
           }
         } else {
-          const nav = make('nav', 'hud-youtube-nav', ''); nav.setAttribute('aria-label', 'YouTube sections');
-          for (const section of ['home', 'search', 'subscriptions', 'shorts', 'history', 'favorites', 'account']) {
-            const button = make('button', 'action hud-youtube-tab', section.toUpperCase()); button.type = 'button'; button.dataset.youtubeFocus = 'true'; button.setAttribute('aria-pressed', String(youtubeState.section === section)); button.addEventListener('click', () => { if (youtubeState.current) leaveYoutubePlayer(); if (section === 'search' || section === 'shorts') { youtubeState.section = section; youtubeState.status = section === 'shorts' ? 'Enter a topic; results are ordinary #shorts searches, not an official Shorts feed.' : 'Enter a search for videos and channels.'; render(hud.snapshot()); } else void loadYoutubeSection(section); }); nav.append(button);
-          }
-          outlet.append(nav);
-          if (youtubeState.section === 'search' || youtubeState.section === 'shorts') {
-            const searchForm = document.createElement('form'); searchForm.className = 'hud-youtube-search';
-            const query = document.createElement('input'); query.type = 'search'; query.maxLength = 100; query.value = youtubeState.query; query.placeholder = youtubeState.section === 'shorts' ? 'TOPIC FOR #SHORTS SEARCH' : 'SEARCH VIDEOS AND CHANNELS'; query.setAttribute('aria-label', 'Search YouTube'); query.dataset.youtubeFocus = 'true';
-            const submit = make('button', 'action', 'SEARCH'); submit.type = 'submit'; submit.dataset.youtubeFocus = 'true'; searchForm.addEventListener('submit', (event) => { event.preventDefault(); youtubeState.query = query.value.trim(); if (!youtubeState.query || youtubeState.query.length > 100) { youtubeState.status = 'Enter a search of 1 to 100 characters.'; status.textContent = youtubeState.status; return; } void loadYoutubeSection(youtubeState.section); }); searchForm.append(query, submit); outlet.append(searchForm);
-          }
-          if (youtubeState.current) {
+          if (youtubeState.section === 'account') {
+            const accountCard = make('section', 'hud-youtube-account-card', '');
+            accountCard.append(make('strong', '', `Connected account: ${youtubeState.account?.email || 'Google account'}`), make('p', 'copy', 'Google tokens remain on the JARVIS YouTube Worker. Revoke access or disconnect from the phone account page.'));
+            const history = make('button', 'action hud-youtube-account-action', 'JARVIS HISTORY'); history.type = 'button'; history.dataset.youtubeFocus = 'true'; history.addEventListener('click', () => void loadYoutubeSection('history'));
+            const favorites = make('button', 'action hud-youtube-account-action', 'FAVORITES'); favorites.type = 'button'; favorites.dataset.youtubeFocus = 'true'; favorites.addEventListener('click', () => void loadYoutubeSection('favorites'));
+            const manage = document.createElement('a'); manage.className = 'action hud-youtube-account-action'; manage.href = `${youtube.backendOrigin}/connect`; manage.target = '_blank'; manage.rel = 'noopener noreferrer'; manage.textContent = 'MANAGE ACCOUNT ON PHONE'; manage.dataset.youtubeFocus = 'true';
+            accountCard.append(history, favorites, manage); outlet.append(accountCard);
+          } else if (youtubeState.current) {
             const title = make('h2', 'hud-youtube-video-title', youtubeState.current.title || 'YouTube video'); outlet.append(title);
             const shell = make('div', `hud-youtube-player-shell${youtubeState.current.kind === 'short' ? ' is-short' : ''}`, ''); shell.id = 'hud-youtube-player'; shell.setAttribute('aria-label', 'YouTube embedded video player'); outlet.append(shell);
             const playerStatus = make('p', 'status hud-youtube-player-status', youtubeState.playerStatus); playerStatus.id = 'hud-youtube-player-status'; outlet.append(playerStatus);
@@ -365,7 +417,9 @@
               const button = make('button', 'hud-youtube-result', ''); button.type = 'button'; button.dataset.youtubeFocus = 'true';
               let imageUrl = ''; try { const candidate = new URL(video.thumbnail || ''); if (candidate.protocol === 'https:' && ['i.ytimg.com', 'img.youtube.com'].includes(candidate.hostname)) imageUrl = candidate.href; } catch {}
               if (imageUrl) { const img = document.createElement('img'); img.src = imageUrl; img.alt = ''; img.loading = 'lazy'; button.append(img); }
-              const text = make('span', '', `${video.title || 'YouTube video'} · ${video.channel || 'YouTube'}`); button.append(text);
+              const text = make('span', 'hud-youtube-result-copy', '');
+              text.append(make('strong', 'hud-youtube-result-title', video.title || 'YouTube video'), make('small', 'hud-youtube-result-channel', video.channel || 'YouTube'));
+              button.append(text);
               if (youtubeState.section === 'history' && Number(video.positionSeconds) > 0) { const resume = make('small', '', `Resume at ${Math.floor(video.positionSeconds)} seconds`); button.append(resume); }
               button.addEventListener('click', () => openYoutubeVideo(video, index)); results.append(button);
             });
@@ -410,5 +464,5 @@
   }
 
   if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => boot(document), { once: true });
-  return { MENU, createHud, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, boot };
+  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, boot };
 }));

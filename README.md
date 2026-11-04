@@ -4,19 +4,21 @@ This standalone Meta Web App keeps working without the Windows JARVIS PC. YouTub
 
 ## YouTube on the glasses
 
+- The HUD is a standard HTML/CSS/JavaScript Meta Ray-Ban Display Web App candidate. Meta's current Web Apps path runs standalone web experiences on Display glasses and supports arrow/Enter navigation, captouch/Neural Band selection, and text entry. Add the deployed HUD URL in Meta AI app → Developer Mode → App Settings → App connections → Add a Web App. It has not yet been installed or tested on physical glasses.
+- The YouTube screen uses a dark, compact YouTube header, account status, search field, and Home / Subscriptions / Shorts tabs. Feed requests cancel stale navigation/search results and suppress duplicate in-flight queries. Thumbnails load lazily and are accepted only from YouTube thumbnail hosts.
 - The phone connection page performs Google sign-in and account management. The glasses never handle Google credentials, OAuth callbacks, API keys, access tokens, or refresh tokens.
-- The HUD requests a short-lived pairing code from the YouTube Worker. The user signs in on the iPhone, enters the code, and approves the glasses. The Worker issues a device credential only after approval; it is kept in HUD memory and expires after 24 hours.
+- The HUD requests a short-lived pairing code from the YouTube Worker. The phone OAuth flow is completed on the Worker origin, then the Worker approves the initiating pairing and issues a device credential only after verification. The credential is kept in HUD memory and expires after 24 hours. It is intentionally not written to browser storage. A HUD restart requires a fresh pairing; an unexpired phone session can approve it without another Google sign-in. Device revocation remains available from the phone account page.
 - Search uses YouTube Data API results and can search videos and channels. Shorts are ordinary video search results matching `#shorts`; this is not a complete Shorts feed.
 - Subscriptions use the authorized `youtube.readonly` scope. Recent uploads are requested only for a verified subscription.
 - Home displays recent authorized YouTube account activity when available. It is not official watch history, a recommendation feed, or ranked suggestions. YouTube Data API does not expose complete official watch history, personalized recommendations, or a complete Shorts feed.
 - JARVIS history and favorites are stored in account-isolated D1 rows. Titles and thumbnails are fetched from YouTube for display. Stored YouTube references are refreshed at least every 25 days while authorization remains available and removed if unavailable.
-- Playback uses the official YouTube IFrame Player API. Actual video/audio, controls, and phone handoff depend on the glasses browser. The HUD keeps a YouTube phone handoff available when embedding fails.
+- Playback uses the official YouTube IFrame Player API. The embed is user-initiated, uses validated 11-character video IDs, and provides a phone/YouTube handoff on errors. YouTube requires an embedded player viewport of at least 200×200 pixels; the HUD enforces that minimum. Actual video/audio and controls still depend on the Meta Web App browser, which has not been verified on hardware.
 
 The Worker implementation, OAuth connection site, D1 schema, local tests, and deployment preparation are in `../glasses-youtube-worker`. A separate Google OAuth Web client and Cloudflare D1 setup are required before it can be deployed. Do not put any Worker secrets in this static package.
 
 ## Text input and navigation
 
-The HUD uses standard Web App inputs for search. On supported glasses, enter text with Meta's available dictation, handwriting, or on-screen keyboard. Neural Band up/down/select and keyboard arrows, Enter, and Escape navigate the interface. If the installed Meta runtime does not expose a text-entry method to this Web App, search entry requires the phone-assisted page or another Meta-supported input; physical text input must be verified on device.
+The HUD uses standard Web App inputs for search. Meta documents dictation, handwriting, and on-screen keyboard text input plus Neural Band/captouch selection for Web Apps. This project maps arrow keys, Enter, and Escape for navigation; the physical input event mapping still needs device verification.
 
 ## Local checks and preview
 
