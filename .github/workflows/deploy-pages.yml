@@ -44,6 +44,8 @@ jobs:
         run: |
           RELEASE_ID="$(git rev-parse HEAD)"
           node scripts/prepare-release.cjs --source . --output .site --build "$RELEASE_ID"
+      - name: Gate release artifact before deployment
+        run: node scripts/verify-release.cjs --root .site --build "$(git rev-parse HEAD)"
       - name: Upload static HUD only
         uses: actions/upload-pages-artifact@v4
         with:
