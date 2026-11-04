@@ -319,7 +319,7 @@
           outlet.append(pair, make('p', 'copy hud-youtube-help', 'Authorize on your phone. The short-lived link is bound to this one-time glasses pairing.'));
           if (youtubeState.pairing) {
             const codeDisplay = make('h2', 'hud-youtube-pair-code', youtubeState.pairing.userCode); codeDisplay.setAttribute('aria-label', 'One-time phone approval code');
-            const help = make('p', 'copy hud-youtube-help', 'If the phone page did not open, scan or open this one-time link. Google sign-in and approval continue automatically.');
+            const help = make('p', 'copy hud-youtube-help', 'If automatic opening was blocked, use the secure phone link below. Google sign-in and approval continue automatically.');
             const servicePage = make('a', 'action hud-youtube-handoff', 'OPEN PHONE SIGN-IN'); servicePage.href = youtubeState.pairing.connectUrl; servicePage.target = '_blank'; servicePage.rel = 'noopener noreferrer'; servicePage.dataset.youtubeFocus = 'true';
             const check = make('button', 'action', 'CHECK PHONE APPROVAL'); check.type = 'button'; check.dataset.youtubeFocus = 'true'; check.addEventListener('click', () => { void checkYoutubePairing(); });
             outlet.append(codeDisplay, help, servicePage, check);
