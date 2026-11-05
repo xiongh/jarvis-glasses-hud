@@ -4,8 +4,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const PUBLIC_FILES = ['.nojekyll', 'app.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'styles.css', 'youtube-player.js'];
-const HASHED_FILES = ['app.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'styles.css', 'youtube-player.js'];
+const PUBLIC_FILES = ['.nojekyll', 'app.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'youtube-player.js'];
+const HASHED_FILES = ['app.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'youtube-player.js'];
 const SHA = /^[a-f0-9]{64}$/;
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 

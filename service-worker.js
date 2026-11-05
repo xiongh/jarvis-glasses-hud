@@ -2,7 +2,7 @@ const BUILD_ID = 'local';
 const CACHE_PREFIX = 'jarvis-glasses-hud-v5-';
 const ALL_CACHE_PREFIX = 'jarvis-glasses-hud-';
 const CACHE = `${CACHE_PREFIX}${BUILD_ID}`;
-const ASSETS = ['./', './index.html', './styles.css', './youtube-player.js', './app.js', './manifest.webmanifest', './release-manifest.json', './health.json'];
+const ASSETS = ['./', './index.html', './styles.css', './youtube-player.js', './app.js', './staging-passkey.html', './staging-passkey.js', './manifest.webmanifest', './release-manifest.json', './health.json'];
 self.addEventListener('install', (event) => event.waitUntil((async () => {
   const cache = await caches.open(CACHE);
   try {

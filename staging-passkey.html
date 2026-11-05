@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="color-scheme" content="dark" />
+    <title>JARVIS staging passkey</title>
+    <style>
+      :root { color-scheme: dark; font: 16px/1.45 system-ui, sans-serif; background: #080b10; color: #eaf2ff; }
+      body { max-width: 34rem; margin: 0 auto; padding: max(1rem, env(safe-area-inset-top)) 1rem 2rem; }
+      main { border: 1px solid #31506f; border-radius: 1rem; padding: 1.25rem; background: #0d141d; }
+      h1 { margin-top: 0; font-size: 1.35rem; } p { color: #bdcce0; } label { display: grid; gap: .4rem; margin: 1rem 0; }
+      input, button { min-height: 2.75rem; box-sizing: border-box; border-radius: .6rem; font: inherit; }
+      input { border: 1px solid #58718d; background: #05080d; color: inherit; padding: .6rem; }
+      button { width: 100%; border: 0; background: #39a9ff; color: #03111f; font-weight: 700; margin-top: .65rem; }
+      button:disabled { opacity: .55; } #status { min-height: 3rem; margin-top: 1rem; white-space: pre-wrap; }
+      .small { font-size: .86rem; } .warn { color: #ffcf75; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>JARVIS staging passkey</h1>
+      <p class="warn">Staging only. This page is public, but it cannot enroll anyone without a valid short-lived owner ticket.</p>
+      <p class="small">It uses only <code>https://xiongh.github.io</code> as its WebAuthn origin and never stores a ticket or session token.</p>
+      <form id="enroll-form" novalidate>
+        <label>One-time enrollment ticket
+          <input id="ticket" type="password" inputmode="text" autocomplete="off" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9_-]{43}" maxlength="43" required />
+        </label>
+        <button id="enroll" type="submit">Enroll platform passkey</button>
+      </form>
+      <button id="authenticate" type="button">Authenticate with passkey</button>
+      <p id="status" role="status" aria-live="polite">Checking browser support…</p>
+    </main>
+    <script src="./staging-passkey.js"></script>
+  </body>
+</html>
