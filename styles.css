@@ -64,6 +64,25 @@
 body { margin: 0; min-height: 100vh; background: #000; }
 .hud { width: min(100vw, 600px); min-height: min(100vh, 600px); margin: 0 auto; padding: 28px; display: flex; flex-direction: column; background: #000; color: #fff; }
 .hud-update-status { margin: 4px 0; color: #8ff; font-size: 11px; line-height: 1.25; }
+.session-lock { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; overflow: auto; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); background: #000; }
+.session-lock[hidden] { display: none; }
+.session-lock-card { display: grid; gap: 12px; width: min(100%, 440px); max-height: 100%; overflow: auto; padding: 20px; border: 1px solid #496; border-radius: 12px; background: #071010; }
+.session-lock-card h1, .session-lock-card p { margin: 0; }
+.lock-code { color: #8ff; font-size: 30px; font-weight: 800; letter-spacing: .16em; }
+.phone-unlock-link { display: block; min-height: 42px; padding: 12px; border: 1px solid #8ff; border-radius: 6px; color: #dfffff; text-align: center; font-size: 11px; font-weight: 700; text-decoration: none; }
+html[data-jarvis-auth-enabled="true"] #jarvis-glasses-hud { visibility: hidden; }
+.phone-unlock-page { min-height: 100vh; margin: 0; padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom)); box-sizing: border-box; color: #f1f4fa; background: #090b10; font: 1rem/1.5 system-ui, sans-serif; }
+.phone-unlock-card { width: min(100%, 36rem); margin: 8vh auto; padding: clamp(1rem, 5vw, 2rem); box-sizing: border-box; border: 1px solid #46515f; border-radius: 1rem; background: #11151d; }
+.phone-unlock-card h1 { line-height: 1.15; }
+.phone-unlock-card label { display: block; margin: 1.2rem 0 .35rem; }
+.phone-unlock-card input { display: block; width: 100%; box-sizing: border-box; padding: .85rem; font-size: 1.3rem; letter-spacing: .18em; }
+.phone-unlock-card button { margin-top: 1rem; width: 100%; min-height: 3rem; }
+.phone-unlock-card [role="status"] { min-height: 1.5em; }
+.release-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px; min-height: 29px; margin-top: 4px; color: #9eb4b4; font-size: 9px; letter-spacing: .06em; }
+.release-controls button { min-height: 28px; padding: 4px 7px; border: 1px solid #668; border-radius: 4px; background: #050808; color: #dfffff; font: inherit; font-weight: 700; cursor: pointer; }
+.release-controls button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; border-color: #8ff; }
+.release-controls button:disabled { opacity: .6; }
+.release-controls [hidden] { display: none; }
 .hud-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #8ff; padding-bottom: 14px; letter-spacing: .13em; font-size: 17px; }
 .brand { font-weight: 800; color: #fff; }.online { color: #8f8; font-size: 13px; }
 .hud-screen { display: flex; flex: 1; min-height: 0; flex-direction: column; justify-content: center; gap: 18px; }
