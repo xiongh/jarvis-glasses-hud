@@ -70,7 +70,7 @@ test('arrow navigation wraps focus without changing HUD screen; Escape uses the 
 test('phone approval button starts a Worker pairing and rerenders only the Google Apps screen', async () => {
   let now = 1_000_000;
   const calls = [];
-  const pairing = { pairingId: 'a'.repeat(48), pollSecret: 'b'.repeat(64), userCode: '01234567', expiresAt: now + 180_000 };
+  const pairing = { pairingId: 'a'.repeat(48), pairingAlias: 'K7M2Q9', pollSecret: 'b'.repeat(64), userCode: '01234567', expiresAt: now + 180_000 };
   const connector = createGoogleConnectorClient({
     workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
     fetchImpl: async (url, options) => {
@@ -87,7 +87,8 @@ test('phone approval button starts a Worker pairing and rerenders only the Googl
   await actions.startPairing();
   assert.equal(calls[0].url, 'https://relay.example.workers.dev/v1/hud/pairings');
   assert.equal(calls[0].options.method, 'POST');
-  assert.equal(state.pairing.pairingId, pairing.pairingId);
+  assert.equal(state.pairing.pairingAlias, pairing.pairingAlias);
+  assert.equal(Object.hasOwn(state.pairing, 'pairingId'), false);
   assert.equal(state.pairing.userCode, '01234567');
   assert.equal(Object.hasOwn(state.pairing, 'pollSecret'), false);
   assert.equal(state.pairing.expiresAt, now + 180_000);
@@ -110,7 +111,7 @@ test('pairing errors and expired requests update status without navigating away'
   assert.match(state.status, /relay temporarily unavailable/i);
   assert.equal(hud.snapshot().screen, 'connect-apps');
 
-  const livePairing = { pairingId: 'c'.repeat(48), pollSecret: 'd'.repeat(64), userCode: '12345678', expiresAt: now + 180_000 };
+  const livePairing = { pairingId: 'c'.repeat(48), pairingAlias: 'M7R4Q2', pollSecret: 'd'.repeat(64), userCode: '12345678', expiresAt: now + 180_000 };
   const expiring = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
     fetchImpl: async () => ({ ok: true, status: 201, json: async () => livePairing }) });
   const expiryState = { status: '', pairing: null, busy: false, result: '' };
