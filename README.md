@@ -60,3 +60,7 @@ The Pages workflow does not deploy the YouTube Worker. Worker deployment is sepa
 7. On the phone connection page, review authorized devices and revoke any device you no longer use. Disconnecting deletes that account's JARVIS data and revokes Google authorization; it does not delete YouTube data.
 
 Cloud configuration and physical-device playback are unverified until performed in the user's accounts and on the actual display glasses.
+
+## Google Apps HUD relay
+
+The glasses HUD sends typed, read-only Google commands through the short-lived Connected Apps Worker capability. Pairing still requires approval in the authenticated private JARVIS phone companion. Google OAuth grants and API calls stay on the private backend; this static site contains only the public Worker origin and no relay secrets.
