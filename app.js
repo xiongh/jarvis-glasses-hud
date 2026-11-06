@@ -472,9 +472,10 @@
           bindConnectAppsAction(start, () => { void googleAppsActions.startPairing(); });
           outlet.append(start);
           if (googleConnectorState.pairing) {
-            const pairingId = make('p', 'copy', `PAIRING ID · ${googleConnectorState.pairing.pairingId}`);
+            const pairingId = make('p', 'copy', `PAIRING ID · ${googleConnectorState.pairing.pairingAlias}`);
             const pairingCode = make('h2', 'hud-youtube-pair-code', googleConnectorState.pairing.userCode); pairingCode.setAttribute('aria-label', 'One-time eight-digit Google Apps pairing code'); pairingCode.setAttribute('role', 'status'); pairingCode.setAttribute('aria-live', 'polite');
-            outlet.append(pairingId, pairingCode, make('p', 'copy', 'Enter the pairing ID and code on your iPhone. The code expires after three minutes. The polling secret stays in memory and is never displayed.'));
+            outlet.append(pairingId, pairingCode, make('p', 'copy', 'Enter the six-character pairing ID and code on your iPhone. The code expires after three minutes. The long pairing ID and polling secret remain in memory for secure polling.'));
+            if (globalThis.navigator?.clipboard?.writeText) { const copy = make('button', 'action', 'COPY PAIRING ID'); copy.type = 'button'; copy.dataset.connectorsFocus = 'true'; copy.addEventListener('click', async () => { try { await globalThis.navigator.clipboard.writeText(googleConnectorState.pairing.pairingAlias); googleConnectorState.status = 'Pairing ID copied. Enter it with the code on your iPhone.'; } catch { googleConnectorState.status = 'Could not copy the pairing ID. Enter it manually.'; } render(hud.snapshot()); }); outlet.append(copy); }
             const poll = make('button', 'action', 'CHECK PHONE APPROVAL'); poll.type = 'button'; poll.disabled = googleConnectorState.busy; poll.dataset.connectorsFocus = 'true';
             bindConnectAppsAction(poll, () => { void googleAppsActions.pollPairing(); });
             outlet.append(poll);

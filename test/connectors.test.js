@@ -7,7 +7,7 @@ const path = require('node:path');
 const { APPS, normalizeCompanionUrl, createGoogleConnectorClient } = require('../connectors');
 
 const pairing = (now, expiresAt = now + 180_000) => ({
-  pairingId: 'a'.repeat(48), pollSecret: 'b'.repeat(64), userCode: '01234567', expiresAt,
+  pairingId: 'a'.repeat(48), pairingAlias: 'K7M2Q9', pollSecret: 'b'.repeat(64), userCode: '01234567', expiresAt,
 });
 const response = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -29,7 +29,7 @@ test('pairing validates the opaque ID, eight-digit code, poll secret, and three-
   const client = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
     fetchImpl: async (url, options) => { sent = { url, options }; return response(201, pairing(now)); } });
   const challenge = await client.startPairing();
-  assert.deepEqual(challenge, { pairingId: 'a'.repeat(48), userCode: '01234567', expiresAt: now + 180_000 });
+  assert.deepEqual(challenge, { pairingAlias: 'K7M2Q9', userCode: '01234567', expiresAt: now + 180_000 });
   assert.equal(Object.hasOwn(challenge, 'pollSecret'), false);
   assert.deepEqual(JSON.parse(sent.options.body).apps, APPS);
   assert.equal(sent.options.credentials, 'omit');
@@ -40,6 +40,7 @@ test('client rejects malformed or overlong pairing challenges', async () => {
   const now = 2_000_000;
   const malformed = [
     { ...pairing(now), pairingId: 'bad' },
+    { ...pairing(now), pairingAlias: 'BAD!!!' },
     { ...pairing(now), userCode: '1234567' },
     { ...pairing(now), expiresAt: now + 210_001 },
   ];
@@ -62,8 +63,10 @@ test('device capability stays in memory, commands use only relay routes, and rev
       throw new Error('Unexpected relay route.');
     } });
 
-  await client.startPairing();
+  const challenge = await client.startPairing();
+  assert.deepEqual(challenge, { pairingAlias: 'K7M2Q9', userCode: '01234567', expiresAt: now + 180_000 });
   assert.deepEqual(await client.pollPairing(), { paired: true, apps: ['gmail'], expiresAt: now + 900_000 });
+  assert.deepEqual(JSON.parse(calls[1].options.body), { pairingId: 'a'.repeat(48), pollSecret: 'b'.repeat(64) }, 'HUD polling retains its internal pairing ID and private poll secret');
   assert.equal(client.paired(), true);
   await assert.rejects(client.runCommand('show latest emails'), /Authorization revoked/);
   assert.equal(client.paired(), false);
@@ -81,6 +84,9 @@ test('HUD shows a configured private companion link and keeps connector scripts 
   const worker = fs.readFileSync(path.join(__dirname, '..', 'service-worker.js'), 'utf8');
   assert.match(app, /normalizeCompanionUrl\?\.\(relayConfig\.phoneCompanionUrl\)/);
   assert.match(app, /OPEN APPS & CONNECTIONS ON IPHONE/);
+  assert.match(app, /PAIRING ID · \$\{googleConnectorState\.pairing\.pairingAlias\}/);
+  assert.match(app, /COPY PAIRING ID/);
+  assert.doesNotMatch(app, /PAIRING ID · \$\{googleConnectorState\.pairing\.pairingId\}/);
   assert.match(app, /role', 'status'/);
   assert.doesNotMatch(app, /YOUR_PRIVATE_JARVIS_ORIGIN/);
   assert.match(config, /phoneCompanionUrl: 'https:\/\/[a-z0-9.-]+\.ts\.net\/connect-apps\.html'/);
