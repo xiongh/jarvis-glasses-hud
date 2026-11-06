@@ -239,6 +239,67 @@
     return { snapshot, move, select, back, handleKey, render: commit };
   }
 
+  function handleConnectAppsKey(event, { hud, outlet, document }) {
+    if (hud.snapshot().screen !== 'connect-apps') return false;
+    if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) && event.key !== 'Escape') return true;
+    if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); hud.back(); return true; }
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      event.preventDefault();
+      const controls = [...outlet.querySelectorAll('[data-connectors-focus]:not(:disabled)')];
+      if (controls.length) {
+        const current = controls.indexOf(document.activeElement);
+        const direction = ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1;
+        controls[(current + direction + controls.length) % controls.length].focus();
+      }
+      return true;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      // Consume activation keys even when focus was lost during a rerender.
+      // Falling through to hud.handleKey() selects the current screen and exits.
+      event.preventDefault();
+      if (document.activeElement?.matches?.('[data-connectors-focus]:not(input)')) document.activeElement.click();
+      return true;
+    }
+    return false;
+  }
+
+  function createGoogleAppsActions({ state, connector, hud, render = () => {} }) {
+    const redraw = () => render(hud.snapshot());
+    return {
+      async startPairing() {
+        state.busy = true; state.status = 'Creating a short-lived pairing request…'; redraw();
+        try { state.pairing = await connector.startPairing(); state.status = 'Approve this pairing in Apps & Connections on your iPhone.'; }
+        catch (error) { state.status = error.message || 'Could not start pairing.'; }
+        finally { state.busy = false; redraw(); }
+      },
+      async pollPairing() {
+        state.busy = true; state.status = 'Checking phone approval…'; redraw();
+        try {
+          const value = await connector.pollPairing();
+          state.status = value.paired ? `Connected for this session: ${value.apps.join(', ')}.` : 'Waiting for owner approval on the phone.';
+          if (value.paired) state.pairing = null;
+        } catch (error) { state.status = error.message || 'Pairing check failed.'; }
+        finally { state.busy = false; redraw(); }
+      },
+      async runCommand(command) {
+        state.busy = true; state.status = 'Reading your authorized Google app…'; state.result = ''; redraw();
+        try { state.result = await connector.runCommand(command); state.status = 'Read-only lookup complete.'; }
+        catch (error) { state.status = error.message || 'Google lookup failed.'; }
+        finally { state.busy = false; redraw(); }
+      },
+      clear() {
+        connector.clear(); state.pairing = null; state.result = ''; state.status = 'Authorization cleared from this glasses session.'; redraw();
+      },
+    };
+  }
+
+  function bindConnectAppsAction(element, action) {
+    element.addEventListener('click', (event) => {
+      if (!element.disabled) action(event);
+    });
+    return element;
+  }
+
   function boot(document) {
     const outlet = document.querySelector('#hud-screen');
     if (!outlet) return null;
@@ -408,19 +469,19 @@
         } else outlet.append(make('p', 'copy', 'Phone companion URL is not configured for this HUD release.'));
         if (googleConnectors?.available() && !googleConnectors.paired()) {
           const start = make('button', 'action', googleConnectorState.busy ? 'PLEASE WAIT' : 'START PHONE APPROVAL'); start.type = 'button'; start.disabled = googleConnectorState.busy; start.dataset.connectorsFocus = 'true';
-          start.addEventListener('click', async () => { googleConnectorState.busy = true; googleConnectorState.status = 'Creating a short-lived pairing request…'; render(hud.snapshot()); try { googleConnectorState.pairing = await googleConnectors.startPairing(); googleConnectorState.status = 'Approve this pairing in Apps & Connections on your iPhone.'; } catch (error) { googleConnectorState.status = error.message || 'Could not start pairing.'; } finally { googleConnectorState.busy = false; render(hud.snapshot()); } });
+          bindConnectAppsAction(start, () => { void googleAppsActions.startPairing(); });
           outlet.append(start);
           if (googleConnectorState.pairing) {
             const pairingId = make('p', 'copy', `PAIRING ID · ${googleConnectorState.pairing.pairingId}`);
             const pairingCode = make('h2', 'hud-youtube-pair-code', googleConnectorState.pairing.userCode); pairingCode.setAttribute('aria-label', 'One-time eight-digit Google Apps pairing code'); pairingCode.setAttribute('role', 'status'); pairingCode.setAttribute('aria-live', 'polite');
             outlet.append(pairingId, pairingCode, make('p', 'copy', 'Enter the pairing ID and code on your iPhone. The code expires after three minutes. The polling secret stays in memory and is never displayed.'));
             const poll = make('button', 'action', 'CHECK PHONE APPROVAL'); poll.type = 'button'; poll.disabled = googleConnectorState.busy; poll.dataset.connectorsFocus = 'true';
-            poll.addEventListener('click', async () => { googleConnectorState.busy = true; googleConnectorState.status = 'Checking phone approval…'; render(hud.snapshot()); try { const value = await googleConnectors.pollPairing(); googleConnectorState.status = value.paired ? `Connected for this session: ${value.apps.join(', ')}.` : 'Waiting for owner approval on the phone.'; if (value.paired) googleConnectorState.pairing = null; } catch (error) { googleConnectorState.status = error.message || 'Pairing check failed.'; } finally { googleConnectorState.busy = false; render(hud.snapshot()); } });
+            bindConnectAppsAction(poll, () => { void googleAppsActions.pollPairing(); });
             outlet.append(poll);
           }
         } else if(googleConnectors?.paired()) {
           googleConnectorState.status=`Paired for this session: ${googleConnectors.apps.join(', ')}.`;outlet.append(make('p','copy',googleConnectorState.status));
-          const form=document.createElement('form');form.className='hud-youtube-search';const input=document.createElement('input');input.type='text';input.maxLength=1200;input.placeholder='Ask about Gmail, Calendar, Contacts, Drive, Docs, Sheets, or Tasks';input.setAttribute('aria-label','Google Apps command');input.dataset.connectorsFocus='true';const run=make('button','action','ASK JARVIS');run.type='submit';run.dataset.connectorsFocus='true';run.disabled=googleConnectorState.busy;form.addEventListener('submit',async event=>{event.preventDefault();const command=input.value.trim();if(!command||googleConnectorState.busy)return;googleConnectorState.busy=true;googleConnectorState.status='Reading your authorized Google app…';googleConnectorState.result='';render(hud.snapshot());try{googleConnectorState.result=await googleConnectors.runCommand(command);googleConnectorState.status='Read-only lookup complete.';}catch(error){googleConnectorState.status=error.message||'Google lookup failed.';}finally{googleConnectorState.busy=false;render(hud.snapshot());}});form.append(input,run);outlet.append(form);if(googleConnectorState.result){const result=make('pre','copy',googleConnectorState.result);result.setAttribute('aria-label','Google Apps response');outlet.append(result);}const reconnect=make('button','action','CLEAR SESSION');reconnect.type='button';reconnect.dataset.connectorsFocus='true';reconnect.addEventListener('click',()=>{googleConnectors.clear();googleConnectorState.pairing=null;googleConnectorState.result='';googleConnectorState.status='Authorization cleared from this glasses session.';render(hud.snapshot());});outlet.append(reconnect);
+          const form=document.createElement('form');form.className='hud-youtube-search';const input=document.createElement('input');input.type='text';input.maxLength=1200;input.placeholder='Ask about Gmail, Calendar, Contacts, Drive, Docs, Sheets, or Tasks';input.setAttribute('aria-label','Google Apps command');input.dataset.connectorsFocus='true';const run=make('button','action','ASK JARVIS');run.type='submit';run.dataset.connectorsFocus='true';run.disabled=googleConnectorState.busy;form.addEventListener('submit',event=>{event.preventDefault();const command=input.value.trim();if(!command||googleConnectorState.busy)return;void googleAppsActions.runCommand(command);});form.append(input,run);outlet.append(form);if(googleConnectorState.result){const result=make('pre','copy',googleConnectorState.result);result.setAttribute('aria-label','Google Apps response');outlet.append(result);}const reconnect=make('button','action','CLEAR SESSION');reconnect.type='button';reconnect.dataset.connectorsFocus='true';bindConnectAppsAction(reconnect,()=>googleAppsActions.clear());outlet.append(reconnect);
         }
         const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.dataset.connectorsFocus = 'true'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
       }
@@ -537,6 +598,7 @@
       const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); backButton.focus();
     };
     hud = createHud({ render });
+    const googleAppsActions = createGoogleAppsActions({ state: googleConnectorState, connector: googleConnectors, hud, render });
     const restoreYoutubeSession = async () => {
       const result = await youtube.restore();
       youtubeState.sessionReady = true;
@@ -550,12 +612,7 @@
       render(hud.snapshot());
     };
     document.addEventListener('keydown', (event) => {
-      if (hud.snapshot().screen === 'connect-apps') {
-        if (['INPUT','TEXTAREA'].includes(event.target?.tagName) && event.key !== 'Escape') return;
-        if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); hud.back(); return; }
-        if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)) { event.preventDefault(); const controls=[...outlet.querySelectorAll('[data-connectors-focus]:not(:disabled)')];if(controls.length){const current=controls.indexOf(document.activeElement),direction=['ArrowUp','ArrowLeft'].includes(event.key)?-1:1;controls[(current+direction+controls.length)%controls.length].focus();}return; }
-        if ((event.key==='Enter'||event.key===' ')&&document.activeElement?.matches?.('[data-connectors-focus]:not(input)')) {event.preventDefault();document.activeElement.click();return;}
-      }
+      if (handleConnectAppsKey(event, { hud, outlet, document })) return;
       if (hud.snapshot().screen === 'youtube') {
         if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); if (youtubeState.current) { leaveYoutubePlayer(); render(hud.snapshot()); } else hud.back(); return; }
         if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName)) return;
@@ -580,5 +637,5 @@
   }
 
   if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => boot(document), { once: true });
-  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, boot };
+  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, handleConnectAppsKey, createGoogleAppsActions, bindConnectAppsAction, boot };
 }));
