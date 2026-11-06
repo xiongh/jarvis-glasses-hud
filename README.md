@@ -64,3 +64,5 @@ Cloud configuration and physical-device playback are unverified until performed 
 ## Google Apps HUD relay
 
 The glasses HUD sends typed, read-only Google commands through the short-lived Connected Apps Worker capability. Pairing still requires approval in the authenticated private JARVIS phone companion. Google OAuth grants and API calls stay on the private backend; this static site contains only the public Worker origin and no relay secrets.
+
+`phoneCompanionUrl` in `connectors-config.js` is public routing metadata, not a credential. It must be an HTTPS Tailscale `*.ts.net/connect-apps.html` URL; Tailscale access control and the authenticated JARVIS session still protect the private companion.
