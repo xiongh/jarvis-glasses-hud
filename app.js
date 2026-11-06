@@ -159,14 +159,38 @@
 
   function registerHudUpdates(navigatorObject = globalThis.navigator, target = globalThis, documentObject = globalThis.document) {
     const serviceWorker = navigatorObject?.serviceWorker;
-    if (!serviceWorker?.register) return null;
-    const status = documentObject?.getElementById?.('hud-update-status');
+    const collect = (selector, id) => {
+      const found = [...(documentObject?.querySelectorAll?.(selector) || [])];
+      const fallback = documentObject?.getElementById?.(id);
+      return found.length ? found : fallback ? [fallback] : [];
+    };
+    const statuses = collect('[data-hud-update-status]', 'hud-update-status');
+    const versions = collect('[data-hud-build-version]', 'hud-build-version');
+    const checkButtons = collect('[data-hud-check-updates]', 'hud-check-updates');
+    const reloadButtons = collect('[data-hud-reload-update]', 'hud-reload-update');
+    if (!serviceWorker?.register) {
+      checkButtons.forEach((button) => { button.disabled = true; });
+      reloadButtons.forEach((button) => { button.hidden = true; });
+      statuses.forEach((status) => { status.textContent = 'Update controls are unavailable in this Web App runtime.'; });
+      return null;
+    }
     let registration = null;
-    const show = (message) => { if (status) status.textContent = message; };
+    let reloadRequested = false;
+    let reloadStarted = false;
+    let latestBuildId = '';
+    let activatedUpdateId = '';
+    const show = (message) => { statuses.forEach((status) => { status.textContent = message; }); };
+    const showReload = (visible) => { reloadButtons.forEach((button) => { button.hidden = !visible; }); };
+    const currentBuild = () => versions[0]?.dataset?.buildId || '';
+    const setCurrentBuild = (buildId) => {
+      if (!/^(?:local|[a-f0-9]{40})$/.test(buildId || '')) return;
+      versions.forEach((version) => { version.dataset.buildId = buildId; version.textContent = `BUILD ${buildId === 'local' ? 'LOCAL' : buildId.slice(0, 12)}`; });
+    };
     const checkManifest = async () => {
       if (!globalThis.fetch || navigatorObject.onLine === false) return false;
       try {
-        const response = await globalThis.fetch(RELEASE_MANIFEST_URL, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        // A unique query key bypasses this release's cache-first service worker.
+        const response = await globalThis.fetch(`${RELEASE_MANIFEST_URL}?check=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } });
         const manifest = await response.json();
         if (!response.ok || !/^(?:local|[a-f0-9]{40})$/.test(manifest.buildId || '') || !manifest.files || typeof manifest.files !== 'object') throw new Error('invalid manifest');
         return manifest;
@@ -175,19 +199,65 @@
         return false;
       }
     };
+    const releaseReady = () => {
+      showReload(true);
+      show('A Pages-verified JARVIS update is ready. Choose RELOAD LATEST when convenient.');
+    };
     const check = async () => {
       if (!registration || navigatorObject.onLine === false) return Promise.resolve(false);
+      checkButtons.forEach((button) => { button.disabled = true; });
+      show('Checking for a verified JARVIS release…');
       const manifest = await checkManifest();
+      if (manifest) latestBuildId = manifest.buildId;
       return registration.update().then(() => {
-        if (manifest && registration.waiting) show(`JARVIS release ${manifest.buildId.slice(0, 12)} is ready. Close and reopen the Web App to load it.`);
+        if (manifest && manifest.buildId !== currentBuild()) {
+          if (registration.waiting) releaseReady();
+          else show(`JARVIS ${manifest.buildId.slice(0, 12)} found. The verified update is installing…`);
+        } else if (registration.waiting) releaseReady();
+        else if (manifest) show(`JARVIS ${currentBuild().slice(0, 12) || manifest.buildId.slice(0, 12)} is current.`);
         return true;
       }).catch(() => {
         show('Update check unavailable. The current HUD remains available.');
         return false;
-      });
+      }).finally(() => { checkButtons.forEach((button) => { button.disabled = false; }); });
     };
+    const activateLatest = () => {
+      if (!registration?.waiting) {
+        if (activatedUpdateId && activatedUpdateId !== currentBuild()) {
+          reloadRequested = true;
+          show('Loading the latest JARVIS release…');
+          reloadAfterActivation();
+          return;
+        }
+        show('No verified update is ready yet. Check again shortly.'); return;
+      }
+      reloadRequested = true;
+      show('Loading the verified JARVIS release…');
+      registration.waiting.postMessage({ type: 'ACTIVATE_UPDATE' });
+      if (!serviceWorker.controller && target.location?.reload) reloadAfterActivation();
+    };
+    const reloadAfterActivation = () => {
+      if (!reloadRequested || reloadStarted) return;
+      reloadStarted = true;
+      reloadRequested = false;
+      target.location?.reload?.();
+    };
+    checkButtons.forEach((button) => button.addEventListener?.('click', () => { void check(); }));
+    reloadButtons.forEach((button) => button.addEventListener?.('click', activateLatest));
+    documentObject?.addEventListener?.('keydown', (event) => { if (handleUpdateControlsKey(event, documentObject)) event.stopImmediatePropagation?.(); }, true);
+    serviceWorker.addEventListener?.('controllerchange', () => {
+      reloadAfterActivation();
+    });
     serviceWorker.addEventListener?.('message', (event) => {
-      if (event.data?.type === 'JARVIS_HUD_UPDATE_ACTIVATED') show('JARVIS update ready. This session stays active; close and reopen the Web App to load it.');
+      if (event.data?.type === 'JARVIS_HUD_UPDATE_ACTIVATED') {
+        const activatedBuildId = event.data.buildId;
+        if (activatedBuildId && activatedBuildId !== currentBuild()) {
+          activatedUpdateId = activatedBuildId;
+          showReload(true);
+        }
+        if (reloadRequested) reloadAfterActivation();
+        else if (activatedUpdateId) show('A Pages-verified JARVIS update is ready. Choose RELOAD LATEST when convenient.');
+      }
     });
     target.addEventListener?.('online', () => { show(''); check(); });
     documentObject?.addEventListener?.('visibilitychange', () => {
@@ -196,17 +266,37 @@
     target.setInterval?.(check, 6 * 60 * 60 * 1000);
     serviceWorker.register('./service-worker.js', { updateViaCache: 'none' }).then((value) => {
       registration = value;
-      check();
       registration.addEventListener?.('updatefound', () => {
         const installing = registration.installing;
         installing?.addEventListener?.('statechange', () => {
-          if (installing.state === 'installed' && serviceWorker.controller) show('A verified JARVIS update is ready. Close and reopen the Web App to load it.');
+          if (installing.state === 'installed' && serviceWorker.controller) releaseReady();
         });
       });
+      setCurrentBuild(currentBuild());
+      void check();
     }).catch(() => show(navigatorObject.onLine === false
       ? 'Offline. The current HUD remains available; updates will be checked when online.'
       : 'Update check unavailable. The current HUD remains available.'));
-    return { check };
+    return { check, activateLatest };
+  }
+
+  function handleUpdateControlsKey(event, documentObject = globalThis.document) {
+    const group = event.target?.closest?.('[data-update-controls]') || documentObject?.activeElement?.closest?.('[data-update-controls]');
+    if (!group) return false;
+    const controls = [...(group.querySelectorAll?.('[data-update-focus]:not(:disabled):not([hidden])') || [])];
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      if (!controls.length) return false;
+      event.preventDefault();
+      const index = controls.indexOf(documentObject.activeElement);
+      controls[(index + (['ArrowUp', 'ArrowLeft'].includes(event.key) ? controls.length - 1 : 1)) % controls.length].focus();
+      return true;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && controls.includes(documentObject.activeElement)) {
+      event.preventDefault();
+      documentObject.activeElement.click();
+      return true;
+    }
+    return false;
   }
 
   function createHud({ render = () => {} } = {}) {
@@ -613,6 +703,7 @@
       render(hud.snapshot());
     };
     document.addEventListener('keydown', (event) => {
+      if (handleUpdateControlsKey(event, document)) return;
       if (handleConnectAppsKey(event, { hud, outlet, document })) return;
       if (hud.snapshot().screen === 'youtube') {
         if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); if (youtubeState.current) { leaveYoutubePlayer(); render(hud.snapshot()); } else hud.back(); return; }
@@ -631,12 +722,19 @@
       hud.handleKey(event);
     });
     globalThis.addEventListener?.('popstate', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); });
-    registerHudUpdates(globalThis.navigator, globalThis, document);
     hud.render();
     void restoreYoutubeSession().catch(() => { youtubeState.sessionReady = true; youtubeState.sessionVerified = false; youtubeState.status = 'Could not verify the saved YouTube session. Check the connection and retry.'; render(hud.snapshot()); });
     return hud;
   }
 
-  if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => boot(document), { once: true });
-  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, handleConnectAppsKey, createGoogleAppsActions, bindConnectAppsAction, boot };
+  function shouldWaitForSession(authConfig, sessionState) { return authConfig?.enabled === true && sessionState !== 'unlocked'; }
+  if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
+    registerHudUpdates(globalThis.navigator, globalThis, document);
+    if (shouldWaitForSession(globalThis.JARVIS_AUTH_CONFIG, document.body?.dataset?.jarvisSession)) {
+      document.addEventListener('jarvis-session-unlocked', () => boot(document), { once: true });
+      return;
+    }
+    boot(document);
+  }, { once: true });
+  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, bindConnectAppsAction, boot };
 }));

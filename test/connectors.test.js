@@ -91,4 +91,5 @@ test('HUD shows a configured private companion link and keeps connector scripts 
   assert.doesNotMatch(app, /YOUR_PRIVATE_JARVIS_ORIGIN/);
   assert.match(config, /phoneCompanionUrl: 'https:\/\/[a-z0-9.-]+\.ts\.net\/connect-apps\.html'/);
   assert.match(worker, /'\.\/connectors-config\.js', '\.\/connectors\.js'/);
+  assert.match(worker, /'\.\/auth-config\.js', '\.\/unlock\.html', '\.\/unlock\.js'/);
 });

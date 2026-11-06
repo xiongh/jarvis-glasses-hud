@@ -6,20 +6,30 @@
     <meta name="theme-color" content="#000000" />
     <meta name="color-scheme" content="dark" />
     <meta name="application-name" content="JARVIS HUD" />
+    <script src="./auth-config.js"></script>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="stylesheet" href="./styles.css" />
     <title>JARVIS HUD</title>
   </head>
   <body>
+    <section id="jarvis-session-lock" class="session-lock" role="dialog" aria-modal="true" aria-labelledby="lock-title" aria-live="polite" hidden>
+      <div class="session-lock-card"><p class="eyebrow">JARVIS · PRIVATE SESSION</p><h1 id="lock-title">LOCKED</h1><p id="lock-status">Connect the JARVIS phone approval service to begin.</p><p id="lock-code" class="lock-code" hidden></p><p>Open the JARVIS Unlock page on your iPhone and enter the code shown here. Approve with your enrolled passkey using Face ID, Touch ID, or device passcode.</p><a href="./unlock.html" class="phone-unlock-link">OPEN PHONE UNLOCK PAGE</a><button id="lock-retry" class="action" type="button">START UNLOCK REQUEST</button><div class="release-controls" data-update-controls aria-label="JARVIS release controls"><span data-hud-build-version data-build-id="__JARVIS_BUILD_ID__">BUILD __JARVIS_BUILD_ID__</span><button type="button" aria-label="Check for JARVIS updates" data-hud-check-updates data-update-focus>CHECK UPDATES</button><button type="button" aria-label="Reload the latest JARVIS release" data-hud-reload-update data-update-focus hidden>RELOAD LATEST</button></div><p data-hud-update-status class="hud-update-status" role="status" aria-live="polite"></p></div>
+    </section>
     <main id="jarvis-glasses-hud" class="hud" aria-label="JARVIS glasses HUD">
       <header class="hud-header"><span class="brand">JARVIS</span><span class="online">● ONLINE</span></header>
-      <p id="hud-update-status" class="hud-update-status" role="status" aria-live="polite"></p>
+      <div class="release-controls" data-update-controls aria-label="JARVIS release controls">
+        <span id="hud-build-version" data-hud-build-version data-build-id="__JARVIS_BUILD_ID__">BUILD __JARVIS_BUILD_ID__</span>
+        <button id="hud-check-updates" type="button" aria-label="Check for JARVIS updates" data-hud-check-updates data-update-focus>CHECK UPDATES</button>
+        <button id="hud-reload-update" type="button" aria-label="Reload the latest JARVIS release" data-hud-reload-update data-update-focus hidden>RELOAD LATEST</button>
+      </div>
+      <p id="hud-update-status" data-hud-update-status class="hud-update-status" role="status" aria-live="polite"></p>
       <section id="hud-screen" class="hud-screen" aria-live="polite"></section>
       <p class="hint">ARROWS: NAVIGATE · ENTER: SELECT · ESC: BACK</p>
     </main>
     <script src="./youtube-player.js"></script>
     <script src="./connectors-config.js"></script>
     <script src="./connectors.js"></script>
+    <script src="./unlock.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

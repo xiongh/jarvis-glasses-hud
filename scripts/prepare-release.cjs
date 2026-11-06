@@ -4,8 +4,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const PUBLIC_FILES = ['.nojekyll', 'app.js', 'connectors-config.js', 'connectors.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'youtube-player.js'];
-const HASHED_FILES = ['app.js', 'connectors-config.js', 'connectors.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'youtube-player.js'];
+const PUBLIC_FILES = ['.nojekyll', 'app.js', 'auth-config.js', 'connectors-config.js', 'connectors.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'unlock.html', 'unlock.js', 'youtube-player.js'];
+const HASHED_FILES = ['app.js', 'auth-config.js', 'connectors-config.js', 'connectors.js', 'index.html', 'manifest.webmanifest', 'service-worker.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'unlock.html', 'unlock.js', 'youtube-player.js'];
 const SHA = /^[a-f0-9]{64}$/;
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -34,6 +34,11 @@ function prepareRelease({ source, output, buildId }) {
   const updated = worker.replace(/const BUILD_ID = 'local';/, `const BUILD_ID = '${buildId}';`);
   if (!updated.includes(`const BUILD_ID = '${buildId}';`)) throw new Error('Could not stamp the service worker build ID.');
   fs.writeFileSync(workerPath, updated);
+  const indexPath = path.join(output, 'index.html');
+  const html = fs.readFileSync(indexPath, 'utf8');
+  const buildStampedHtml = html.replaceAll('__JARVIS_BUILD_ID__', buildId);
+  if (buildStampedHtml === html || buildStampedHtml.includes('__JARVIS_BUILD_ID__')) throw new Error('Could not stamp the visible HUD build ID.');
+  fs.writeFileSync(indexPath, buildStampedHtml);
   const files = Object.fromEntries(HASHED_FILES.map((file) => [file, sha256(fs.readFileSync(path.join(output, file)))]));
   const manifest = { schema: 1, app: 'JARVIS HUD', buildId, files };
   verifyManifest(manifest, output);
