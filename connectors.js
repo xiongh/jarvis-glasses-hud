@@ -30,7 +30,9 @@
       return data;
     };
     const persist=async()=>{try{await storage.write({workerOrigin:base,deviceId,renewalToken,deviceExpiresAt});persistent=true;return true;}catch{persistent=false;return false;}};
-    const clear=()=>{pairing=null;deviceToken='';deviceId='';renewalToken='';deviceExpiresAt=0;expiresAt=0;apps=[];persistent=false;void storage.remove(base).catch(()=>{});};
+    // Do not let a stale tab erase a replacement capability saved by a newer
+    // renewal. This matters because renewal capabilities are single-use.
+    const clear=()=>{const savedRenewalToken=renewalToken;pairing=null;deviceToken='';deviceId='';renewalToken='';deviceExpiresAt=0;expiresAt=0;apps=[];persistent=false;void (async()=>{try{const saved=await storage.read(base);if(!savedRenewalToken||saved?.renewalToken===savedRenewalToken)await storage.remove(base);}catch{}})();};
     const acceptRenewal=async value=>{if(typeof value.deviceId!=='string'||!/^hud_[a-f0-9]{32}$/.test(value.deviceId)||typeof value.accessToken!=='string'||!/^[a-f0-9]{64}$/.test(value.accessToken)||typeof value.renewalToken!=='string'||!/^[a-f0-9]{64}$/.test(value.renewalToken)||!Number.isFinite(value.expiresAt)||value.expiresAt<=now()||value.expiresAt>now()+910000||!Number.isFinite(value.deviceExpiresAt)||value.deviceExpiresAt<value.expiresAt||value.deviceExpiresAt>now()+DEVICE_TTL_MS||!Array.isArray(value.apps)||!value.apps.length||value.apps.some(app=>!APPS.includes(app)))throw new Error('Relay returned an invalid device renewal.');deviceId=value.deviceId;deviceToken=value.accessToken;renewalToken=value.renewalToken;expiresAt=value.expiresAt;deviceExpiresAt=value.deviceExpiresAt;apps=[...value.apps];await persist();return true;};
     const renew=async()=>{if(!deviceId||!renewalToken||deviceExpiresAt<=now()){clear();return false;}try{return await acceptRenewal(await request('/v1/hud/renew',{method:'POST',body:{deviceId,renewalToken}}));}catch(error){if(error.status===401){clear();return false;}throw error;}};
     return Object.freeze({

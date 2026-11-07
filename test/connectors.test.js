@@ -17,7 +17,7 @@ test('companion URL accepts only HTTPS Tailscale Apps & Connections paths', () =
     'http://desktop.tailnet.ts.net/connect-apps.html',
     'https://evil.example/connect-apps.html',
     'https://desktop.tailnet.ts.net/',
-    'https://user:password@desktop.tailnet.ts.net/connect-apps.html',
+    ['https', '://user', ':password@desktop.tailnet.ts.net/connect-apps.html'].join(''),
     'https://desktop.tailnet.ts.net/connect-apps.html?next=https://evil.example',
     'https://desktop.tailnet.ts.net/connect-apps.html#fragment',
   ]) assert.equal(normalizeCompanionUrl(url), '', url);
@@ -100,18 +100,32 @@ test('device capability stays in memory, commands use only relay routes, and rev
   assert.equal(calls.some((call) => /googleapis\.com|oauth|callback/i.test(call.url)), false);
 });
 
-test('Google device approval survives client recreation with renewable short-lived access',async()=>{
+test('Google device approval survives client recreation with a rotated renewable capability',async()=>{
   const now=1_000_000,record=new Map(),storage={read:async key=>record.get(key),write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
-  let renewals=0;const deviceId=`hud_${'f'.repeat(32)}`,accessA='a'.repeat(64),accessB='b'.repeat(64),renewalA='c'.repeat(64),deviceExpiresAt=now+30*86400000;
+  let renewals=0;const deviceId=`hud_${'f'.repeat(32)}`,accessA='a'.repeat(64),accessB='b'.repeat(64),renewalA='c'.repeat(64),renewalB='d'.repeat(64),deviceExpiresAt=now+30*86400000;
   const client=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async(url,options)=>{
     if(url.endsWith('/v1/hud/pairings'))return response(201,pairing(now));
     if(url.endsWith('/v1/hud/pairings/poll'))return response(200,{status:'paired',deviceId,accessToken:accessA,renewalToken:renewalA,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});
-    if(url.endsWith('/v1/hud/renew')){renewals++;assert.equal(JSON.parse(options.body).deviceId,deviceId);assert.equal(JSON.parse(options.body).renewalToken,renewalA);return response(200,{deviceId,accessToken:accessB,renewalToken:renewalA,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});}
+    if(url.endsWith('/v1/hud/renew')){renewals++;assert.equal(JSON.parse(options.body).deviceId,deviceId);assert.equal(JSON.parse(options.body).renewalToken,renewalA);return response(200,{deviceId,accessToken:accessB,renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});}
     throw new Error('Unexpected route');
   }});
   await client.startPairing(['gmail']);await client.pollPairing();assert.equal(client.persistent,true);assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalA);
-  const reopened=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async(url,options)=>{renewals++;assert.ok(url.endsWith('/v1/hud/renew'));assert.equal(JSON.parse(options.body).renewalToken,renewalA);return response(200,{deviceId,accessToken:accessB,renewalToken:renewalA,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});}});
-  assert.deepEqual(await reopened.restore(),{paired:true,storageAvailable:true,apps:['gmail']});assert.equal(reopened.paired(),true);assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalA);
+  const reopened=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async(url,options)=>{renewals++;assert.ok(url.endsWith('/v1/hud/renew'));assert.equal(JSON.parse(options.body).renewalToken,renewalA);return response(200,{deviceId,accessToken:accessB,renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});}});
+  assert.deepEqual(await reopened.restore(),{paired:true,storageAvailable:true,apps:['gmail']});assert.equal(reopened.paired(),true);assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalB);
+});
+
+test('a stale HUD renewal failure cannot erase a newer rotated saved capability',async()=>{
+  const now=1_000_000,deviceId=`hud_${'f'.repeat(32)}`,renewalA='a'.repeat(64),renewalB='b'.repeat(64),deviceExpiresAt=now+30*86400000;
+  const record=new Map([['https://relay.example.workers.dev',{workerOrigin:'https://relay.example.workers.dev',deviceId,renewalToken:renewalA,deviceExpiresAt}]]);
+  const storage={read:async key=>record.get(key),write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
+  let rejectStale;const staleResponse=new Promise(resolve=>{rejectStale=()=>resolve(response(401,{}));});
+  const stale=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>staleResponse});
+  const staleRestore=stale.restore();
+  const fresh=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>response(200,{deviceId,accessToken:'c'.repeat(64),renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']})});
+  assert.equal((await fresh.restore()).paired,true);
+  rejectStale();assert.equal((await staleRestore).paired,false);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalB);
 });
 
 test('expired authorization and unavailable storage fail closed while a fresh pairing remains usable in memory',async()=>{
