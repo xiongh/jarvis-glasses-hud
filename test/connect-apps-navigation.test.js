@@ -102,13 +102,17 @@ test('pairing errors and expired requests update status without navigating away'
   let now = 2_000_000;
   const connector = createGoogleConnectorClient({
     workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
-    fetchImpl: async () => { throw new Error('Relay temporarily unavailable'); },
+    fetchImpl: async () => { throw new Error('Relay temporarily unavailable: private-host.ts.net token=synthetic-private-detail'); },
   });
   const hud = makeAppsHud();
   const state = { status: 'Not paired.', pairing: null, busy: false, result: '' };
   const actions = createGoogleAppsActions({ state, connector, hud });
   await actions.startPairing();
-  assert.match(state.status, /relay temporarily unavailable/i);
+  assert.match(state.status, /Google Apps POST \/v1\/hud\/pairings/);
+  assert.match(state.status, /network, DNS, or browser CORS/);
+  assert.match(state.status, /Retry the request/);
+  assert.doesNotMatch(state.status, /Relay temporarily unavailable|private-host|synthetic-private-detail/);
+  assert.equal(state.busy, false);
   assert.equal(hud.snapshot().screen, 'connect-apps');
 
   const livePairing = { pairingId: 'c'.repeat(48), pairingAlias: 'M7R4Q2', pollSecret: 'd'.repeat(64), userCode: '12345678', expiresAt: now + 180_000 };
@@ -120,5 +124,6 @@ test('pairing errors and expired requests update status without navigating away'
   now += 180_001;
   await expiryActions.pollPairing();
   assert.match(expiryState.status, /expired/i);
+  assert.equal(expiryState.busy, false);
   assert.equal(hud.snapshot().screen, 'connect-apps');
 });

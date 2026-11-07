@@ -59,7 +59,7 @@ test('device capability stays in memory, commands use only relay routes, and rev
       calls.push({ url: String(url), options });
       if (String(url).endsWith('/v1/hud/pairings')) return response(201, pairing(now));
       if (String(url).endsWith('/v1/hud/pairings/poll')) return response(200, { status: 'paired', accessToken: 'c'.repeat(64), deviceId: `hud_${'d'.repeat(32)}`, expiresAt: now + 900_000, apps: ['gmail'] });
-      if (String(url).endsWith('/v1/hud/commands')) return response(401, { error: 'Authorization revoked.' });
+      if (String(url).endsWith('/v1/hud/commands')) return response(401, { error: 'Authorization revoked. private-host.ts.net token=synthetic-private-detail' });
       throw new Error('Unexpected relay route.');
     } });
 
@@ -68,8 +68,16 @@ test('device capability stays in memory, commands use only relay routes, and rev
   assert.deepEqual(await client.pollPairing(), { paired: true, apps: ['gmail'], expiresAt: now + 900_000 });
   assert.deepEqual(JSON.parse(calls[1].options.body), { pairingId: 'a'.repeat(48), pollSecret: 'b'.repeat(64) }, 'HUD polling retains its internal pairing ID and private poll secret');
   assert.equal(client.paired(), true);
-  await assert.rejects(client.runCommand('show latest emails'), /Authorization revoked/);
+  await assert.rejects(client.runCommand('show latest emails'), (error) => {
+    assert.equal(error.status, 401);
+    assert.match(error.message, /POST \/v1\/hud\/commands: HTTP 401/);
+    assert.match(error.message, /Authorization expired\. Pair again on your phone/);
+    assert.doesNotMatch(error.message, /Authorization revoked|private-host|synthetic-private-detail/);
+    return true;
+  });
   assert.equal(client.paired(), false);
+  assert.deepEqual(client.apps, []);
+  assert.equal(client.expiresAt, 0);
   await assert.rejects(client.runCommand('show latest emails'), /authorization expired/i);
   assert.equal(calls.length, 3);
   assert.equal(calls[2].url, 'https://relay.example.workers.dev/v1/hud/commands');
