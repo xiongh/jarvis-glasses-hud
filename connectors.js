@@ -2,6 +2,14 @@
   'use strict';
   const APPS=['gmail','google-calendar','google-contacts','google-drive','google-docs','google-sheets','google-tasks'];
   const DEVICE_TTL_MS=30*24*60*60*1000;
+  function commandHelp(value){
+    const command=String(value||'').trim().replace(/^jarvis\b[\s,.:;-]*/i,'');
+    const lower=command.toLowerCase();
+    if(/^(?:hi|hello|hey)(?:\s+jarvis)?[!?.\s]*$/i.test(command))return 'Hello. I can read your connected Gmail, Calendar, Contacts, Drive, Docs, Sheets, and Tasks. Try “show my latest five emails” or “what is on my calendar?”';
+    if(/\b(?:first|oldest|earliest)\b[\s\w]*\b(?:e-?mails?|gmail|inbox|mail|messages?)\b|\b(?:e-?mails?|gmail|inbox|mail|messages?)\b[\s\w]*\b(?:first|oldest|earliest)\b/i.test(lower))return '“First email” could mean newest or oldest. Say “show my latest five emails” for newest messages. Oldest-message search is not supported, so JARVIS will not substitute newest messages silently.';
+    if(!/\b(?:calendar|meetings?|appointments?|events?|e-?mails?|gmail|inbox|mail|messages?|contact|contacts|phone number|email address|spreadsheets?|sheets?|documents?|docs?|drive|file|files|folder|task|tasks|to-do|todo|reminder)\b/i.test(lower))return 'I can help with read-only Gmail, Calendar, Contacts, Drive, Docs, Sheets, and Tasks requests. Try “show my latest five emails” or “what is on my calendar?”';
+    return '';
+  }
   function indexedDbSessionStore(indexedDBImpl=globalThis.indexedDB){
     let opening;
     const open=()=>{if(!indexedDBImpl)return Promise.reject(new Error('storage unavailable'));if(!opening)opening=new Promise((resolve,reject)=>{const req=indexedDBImpl.open('jarvis-google-device-session',1);req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('sessions'))req.result.createObjectStore('sessions',{keyPath:'workerOrigin'});};req.onsuccess=()=>resolve(req.result);req.onerror=req.onblocked=()=>reject(new Error('storage unavailable'));});return opening;};
@@ -44,7 +52,7 @@
       return renewInFlight;
     };
     return Object.freeze({
-      available:()=>Boolean(enabled&&base),paired:()=>Boolean(deviceToken&&expiresAt>now()),get apps(){return [...apps];},get expiresAt(){return expiresAt;},get persistent(){return persistent;},clear,
+      available:()=>Boolean(enabled&&base),paired:()=>Boolean(deviceToken&&expiresAt>now()),get apps(){return [...apps];},get expiresAt(){return expiresAt;},get persistent(){return persistent;},commandHelp,clear,
       restore:async()=>{
         if(restoreInFlight)return restoreInFlight;
         restoreInFlight=(async()=>{
@@ -66,8 +74,8 @@
       },
       startPairing:async(requested=APPS)=>{if(!enabled||!base)throw new Error('Google Apps relay is not configured.');const selected=[...new Set(requested)];if(!selected.length||selected.some(app=>!APPS.includes(app)))throw new Error('Choose valid Google apps.');clear();const value=await request('/v1/hud/pairings',{method:'POST',body:{apps:selected}});if(typeof value.pairingId!=='string'||!/^[a-f0-9]{48}$/.test(value.pairingId)||typeof value.pairingAlias!=='string'||!/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(value.pairingAlias)||typeof value.pollSecret!=='string'||!/^[a-f0-9]{64}$/.test(value.pollSecret)||!/^[0-9]{8}$/.test(value.userCode)||!Number.isFinite(value.expiresAt)||value.expiresAt<=now()||value.expiresAt>now()+210000)throw new Error('Relay returned an invalid or overlong pairing challenge.');pairing={id:value.pairingId,alias:value.pairingAlias,poll:value.pollSecret,code:value.userCode,expiresAt:value.expiresAt};return {pairingAlias:pairing.alias,userCode:pairing.code,expiresAt:pairing.expiresAt};},
       pollPairing:async()=>{if(!pairing||pairing.expiresAt<=now()){clear();throw new Error('Pairing expired. Start a new request.');}const value=await request('/v1/hud/pairings/poll',{method:'POST',body:{pairingId:pairing.id,pollSecret:pairing.poll}});if(value.status==='pending')return {paired:false};if(value.status!=='paired'){clear();throw new Error('Relay returned an invalid device authorization.');}pairing=null;await acceptRenewal(value);return {paired:true,apps:[...apps],expiresAt,deviceExpiresAt,persistent};},
-      runCommand:async(message)=>{if(!deviceToken||expiresAt<=now()){if(!await renew())throw new Error('Glasses authorization expired. Restore the saved approval or pair again on the phone.');}const command=String(message||'').trim();if(!command||command.length>1200)throw new Error('Enter a command of 1 to 1,200 characters.');let queued;try{queued=await request('/v1/hud/commands',{method:'POST',body:{message:command},token:deviceToken});}catch(error){if(error.status!==401||!await renew())throw error;queued=await request('/v1/hud/commands',{method:'POST',body:{message:command},token:deviceToken});}if(typeof queued.jobId!=='string'||!/^[a-f0-9]{40}$/.test(queued.jobId))throw new Error('Relay returned an invalid command receipt.');const end=now()+maxWaitMs;while(now()<end){let result;try{result=await request(`/v1/hud/commands/${queued.jobId}`,{token:deviceToken});}catch(error){if(error.status!==401||!await renew())throw error;result=await request(`/v1/hud/commands/${queued.jobId}`,{token:deviceToken});}if(result.status==='complete'&&typeof result.result?.content==='string')return result.result.content.slice(0,5000);await new Promise(resolve=>setTimeout(resolve,pollMs));}throw new Error('Google lookup is taking too long. Try again.');},
+      runCommand:async(message)=>{const command=String(message||'').trim(),help=commandHelp(command);if(help)return help;if(!deviceToken||expiresAt<=now()){if(!await renew())throw new Error('Glasses authorization expired. Restore the saved approval or pair again on the phone.');}if(!command||command.length>1200)throw new Error('Enter a command of 1 to 1,200 characters.');let queued;try{queued=await request('/v1/hud/commands',{method:'POST',body:{message:command},token:deviceToken});}catch(error){if(error.status!==401||!await renew())throw error;queued=await request('/v1/hud/commands',{method:'POST',body:{message:command},token:deviceToken});}if(typeof queued.jobId!=='string'||!/^[a-f0-9]{40}$/.test(queued.jobId))throw new Error('Relay returned an invalid command receipt.');const end=now()+maxWaitMs;while(now()<end){let result;try{result=await request(`/v1/hud/commands/${queued.jobId}`,{token:deviceToken});}catch(error){if(error.status!==401||!await renew())throw error;result=await request(`/v1/hud/commands/${queued.jobId}`,{token:deviceToken});}if(result.status==='complete'&&typeof result.result?.content==='string')return result.result.content.slice(0,5000);await new Promise(resolve=>setTimeout(resolve,pollMs));}throw new Error('Google lookup is taking too long. Try again.');},
     });
   }
-  return {APPS,normalizeOrigin,normalizeCompanionUrl,indexedDbSessionStore,createGoogleConnectorClient};
+  return {APPS,commandHelp,normalizeOrigin,normalizeCompanionUrl,indexedDbSessionStore,createGoogleConnectorClient};
 });

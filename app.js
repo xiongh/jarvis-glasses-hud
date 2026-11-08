@@ -179,6 +179,7 @@
     let reloadStarted = false;
     let latestBuildId = '';
     let activatedUpdateId = '';
+    let installingTimer = null;
     const show = (message) => { statuses.forEach((status) => { status.textContent = message; }); };
     const showReload = (visible) => { reloadButtons.forEach((button) => { button.hidden = !visible; }); };
     const currentBuild = () => versions[0]?.dataset?.buildId || '';
@@ -200,8 +201,25 @@
       }
     };
     const releaseReady = () => {
+      if (installingTimer) { target.clearTimeout?.(installingTimer); installingTimer = null; }
       showReload(true);
       show('A Pages-verified JARVIS update is ready. Choose RELOAD LATEST when convenient.');
+    };
+    const watchInstalling = () => {
+      const installing = registration?.installing;
+      if (!installing) return;
+      const settled = () => {
+        if (registration?.waiting) { releaseReady(); return; }
+        if (installing.state === 'redundant') show('The verified update did not install. Check again when online.');
+      };
+      installing.addEventListener?.('statechange', settled);
+      settled();
+      if (installingTimer) target.clearTimeout?.(installingTimer);
+      installingTimer = target.setTimeout?.(() => {
+        installingTimer = null;
+        if (registration?.waiting) releaseReady();
+        else if (registration?.installing) show('The verified update is still downloading. The current HUD remains usable; CHECK UPDATES will retry safely.');
+      }, 20_000) || null;
     };
     const check = async () => {
       if (!registration || navigatorObject.onLine === false) return Promise.resolve(false);
@@ -212,7 +230,7 @@
       return registration.update().then(() => {
         if (manifest && manifest.buildId !== currentBuild()) {
           if (registration.waiting) releaseReady();
-          else show(`JARVIS ${manifest.buildId.slice(0, 12)} found. The verified update is installing…`);
+          else { show(`JARVIS ${manifest.buildId.slice(0, 12)} found. The verified update is installing…`); watchInstalling(); }
         } else if (registration.waiting) releaseReady();
         else if (manifest) show(`JARVIS ${currentBuild().slice(0, 12) || manifest.buildId.slice(0, 12)} is current.`);
         return true;
@@ -267,11 +285,11 @@
     serviceWorker.register('./service-worker.js', { updateViaCache: 'none' }).then((value) => {
       registration = value;
       registration.addEventListener?.('updatefound', () => {
-        const installing = registration.installing;
-        installing?.addEventListener?.('statechange', () => {
-          if (installing.state === 'installed' && serviceWorker.controller) releaseReady();
-        });
+        watchInstalling();
       });
+      // A browser can restore a page while a previous update is already
+      // installing, before this page's updatefound listener exists.
+      watchInstalling();
       setCurrentBuild(currentBuild());
       void check();
     }).catch(() => show(navigatorObject.onLine === false
@@ -394,6 +412,8 @@
         finally { state.busy = false; redraw(); }
       },
       async runCommand(command) {
+        const help = connector?.commandHelp?.(command);
+        if (help) { state.result = help; state.status = 'No Google request was sent.'; redraw(); return; }
         state.busy = true; state.status = 'Reading your authorized Google app…'; state.result = ''; redraw();
         try { state.result = await connector.runCommand(command); state.status = 'Read-only lookup complete.'; }
         catch (error) { state.status = error.message || 'Google lookup failed.'; }

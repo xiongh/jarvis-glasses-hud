@@ -15,10 +15,12 @@ const root = path.resolve(__dirname, '..');
 const makeTemp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-hud-release-'));
 
 class Target {
-  constructor() { this.listeners = new Map(); this.location = { reloads: 0, reload() { this.reloads += 1; } }; }
+  constructor() { this.listeners = new Map(); this.timeouts = []; this.location = { reloads: 0, reload() { this.reloads += 1; } }; }
   addEventListener(type, listener) { const list = this.listeners.get(type) || []; list.push(listener); this.listeners.set(type, list); }
   dispatch(type, event = {}) { for (const listener of this.listeners.get(type) || []) listener(event); }
   setInterval() { return 0; }
+  setTimeout(handler) { this.timeouts.push(handler); return this.timeouts.length; }
+  clearTimeout() {}
 }
 
 function button(hidden = false, owner = null) {
@@ -105,6 +107,42 @@ test('reload button can refresh after a new worker activates in another app wind
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('an update already installing when the HUD opens is observed and exposes its verified reload action', async () => {
+  const current = 'a'.repeat(40); const next = 'b'.repeat(40);
+  const status = { textContent: '' }; const version = { dataset: { buildId: current }, textContent: `BUILD ${current}` };
+  const document = new Target(); const reload = button(true, document);
+  document.getElementById = (id) => ({ 'hud-update-status': status, 'hud-build-version': version, 'hud-reload-update': reload }[id]);
+  const serviceWorker = new Target(); serviceWorker.controller = {};
+  const waiting = { postMessage() {} }; const installing = new Target(); installing.state = 'installing';
+  const registration = new Target(); registration.waiting = waiting; registration.installing = installing; registration.update = async () => {};
+  serviceWorker.register = async () => registration;
+  const target = new Target(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ buildId: next, files: {} }) });
+  try {
+    hud.registerHudUpdates({ serviceWorker, onLine: true }, target, document);
+    await new Promise(setImmediate);
+    assert.equal(reload.hidden, false);
+    assert.match(status.textContent, /update is ready/i);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('a slow service-worker install leaves an accurate retryable status instead of an indefinite installing message', async () => {
+  const current = 'a'.repeat(40); const next = 'b'.repeat(40);
+  const status = { textContent: '' }; const version = { dataset: { buildId: current }, textContent: `BUILD ${current}` };
+  const document = new Target(); document.getElementById = (id) => ({ 'hud-update-status': status, 'hud-build-version': version }[id]);
+  const serviceWorker = new Target(); serviceWorker.controller = {};
+  const installing = new Target(); installing.state = 'installing'; const registration = new Target(); registration.waiting = null; registration.installing = installing; registration.update = async () => {};
+  serviceWorker.register = async () => registration;
+  const target = new Target(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ buildId: next, files: {} }) });
+  try {
+    hud.registerHudUpdates({ serviceWorker, onLine: true }, target, document);
+    await new Promise(setImmediate);
+    target.timeouts.at(-1)();
+    assert.match(status.textContent, /still downloading.*CHECK UPDATES/i);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('glasses arrow and Enter controls can operate the release actions', () => {
   const document = { activeElement: null };
   const first = button(false, document); const second = button(false, document); const group = { querySelectorAll: () => [first, second] };
@@ -126,6 +164,15 @@ test('Google Calendar response text is displayed unchanged by the HUD client', a
   const actions = hud.createGoogleAppsActions({ state, connector: { runCommand: async () => formatted }, hud: { snapshot: () => ({ screen: 'connect-apps' }) } });
   await actions.runCommand('What is on my calendar?');
   assert.equal(state.result, formatted);
+});
+
+test('Google Apps UI gives local help for greetings without invoking the relay command', async () => {
+  const state = { busy: false, result: '', status: '' }; let requests = 0;
+  const actions = hud.createGoogleAppsActions({ state, connector: { commandHelp: () => 'Hello. Try a Google Apps request.', runCommand: async () => { requests += 1; } }, hud: { snapshot: () => ({ screen: 'connect-apps' }) } });
+  await actions.runCommand('Hi');
+  assert.equal(requests, 0);
+  assert.equal(state.result, 'Hello. Try a Google Apps request.');
+  assert.equal(state.status, 'No Google request was sent.');
 });
 
 test('canonical HUD retains the existing menu, passkey staging page, YouTube, and Google pairing entry points', () => {

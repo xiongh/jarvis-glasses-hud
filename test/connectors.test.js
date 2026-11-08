@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { APPS, normalizeCompanionUrl, createGoogleConnectorClient } = require('../connectors');
+const { APPS, commandHelp, normalizeCompanionUrl, createGoogleConnectorClient } = require('../connectors');
 
 const pairing = (now, expiresAt = now + 180_000) => ({
   pairingId: 'a'.repeat(48), pairingAlias: 'K7M2Q9', pollSecret: 'b'.repeat(64), userCode: '01234567', expiresAt,
@@ -21,6 +21,32 @@ test('companion URL accepts only HTTPS Tailscale Apps & Connections paths', () =
     'https://desktop.tailnet.ts.net/connect-apps.html?next=https://evil.example',
     'https://desktop.tailnet.ts.net/connect-apps.html#fragment',
   ]) assert.equal(normalizeCompanionUrl(url), '', url);
+});
+
+test('greetings, ambiguous first-email requests, and unsupported conversation never reach the Google relay', async () => {
+  let calls = 0;
+  const client = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, fetchImpl: async () => { calls += 1; throw new Error('must not call relay'); } });
+  for (const command of ['Hi', 'Hello JARVIS', 'What is my first email?', 'Tell me a joke']) {
+    const reply = await client.runCommand(command);
+    assert.match(reply, /Hello|First email|I can help/i, command);
+  }
+  assert.equal(calls, 0);
+  assert.match(commandHelp('Show my latest five emails'), /^$/);
+});
+
+test('latest-email intent reaches the relay with an explicit count while Google failures stay surfaced safely', async () => {
+  const now = 3_000_000; const calls = [];
+  const client = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      if (String(url).endsWith('/v1/hud/renew')) return response(200, { deviceId: `hud_${'a'.repeat(32)}`, accessToken: 'b'.repeat(64), renewalToken: 'c'.repeat(64), expiresAt: now + 900_000, deviceExpiresAt: now + 30 * 86400000, apps: ['gmail'] });
+      if (String(url).endsWith('/v1/hud/commands')) return response(503, { error: 'upstream failed' });
+      throw new Error('Unexpected relay route.');
+    }, storage: { read: async () => ({ workerOrigin: 'https://relay.example.workers.dev', deviceId: `hud_${'a'.repeat(32)}`, renewalToken: 'a'.repeat(64), deviceExpiresAt: now + 30 * 86400000 }), write: async () => {}, remove: async () => {} } });
+  await client.restore();
+  await assert.rejects(client.runCommand('Show my latest five emails'), /HTTP 503.*Relay unavailable/i);
+  assert.equal(calls.filter((call) => call.url.endsWith('/v1/hud/commands')).length, 1);
+  assert.deepEqual(JSON.parse(calls.at(-1).options.body), { message: 'Show my latest five emails' });
 });
 
 test('pairing validates the opaque ID, eight-digit code, poll secret, and three-minute lifetime', async () => {
