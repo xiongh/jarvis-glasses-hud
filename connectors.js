@@ -6,7 +6,7 @@
     const command=String(value||'').trim().replace(/^jarvis\b[\s,.:;-]*/i,'');
     const lower=command.toLowerCase();
     if(/^(?:hi|hello|hey)(?:\s+jarvis)?[!?.\s]*$/i.test(command))return 'Hello. I can read your connected Gmail, Calendar, Contacts, Drive, Docs, Sheets, and Tasks. Try “show my latest five emails” or “what is on my calendar?”';
-    if(!/\b(?:calendar|meetings?|appointments?|events?|e-?mails?|gmail|inbox|mail|messages?|contact|contacts|phone number|email address|spreadsheets?|sheets?|documents?|docs?|drive|file|files|folder|task|tasks|to-do|todo|reminder)\b/i.test(lower))return 'I can help with read-only Gmail, Calendar, Contacts, Drive, Docs, Sheets, and Tasks requests. Try “show my latest five emails” or “what is on my calendar?”';
+    if(!/\b(?:calendar|meetings?|appointments?|events?|e-?mail(?:s|ed)?|gmail|inbox|mail|messages?|contact|contacts|phone number|email address|spreadsheets?|sheets?|documents?|docs?|drive|file|files|folder|task|tasks|to-do|todo|reminder)\b/i.test(lower))return 'I can help with read-only Gmail, Calendar, Contacts, Drive, Docs, Sheets, and Tasks requests. Try “show my latest five emails” or “what is on my calendar?”';
     return '';
   }
   function indexedDbSessionStore(indexedDBImpl=globalThis.indexedDB){

@@ -36,6 +36,7 @@ test('greetings and unsupported conversation never reach the Google relay, while
   await oldest.restore();
   assert.equal(await oldest.runCommand('What is my first email?'), 'Oldest email');
   assert.match(commandHelp('Show my latest five emails'), /^$/);
+  assert.match(commandHelp('Who emailed me yesterday?'), /^$/);
 });
 
 test('latest-email intent reaches the relay with an explicit count while Google failures stay surfaced safely', async () => {
