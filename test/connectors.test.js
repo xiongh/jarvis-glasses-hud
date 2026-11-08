@@ -17,7 +17,7 @@ test('companion URL accepts only HTTPS Tailscale Apps & Connections paths', () =
     'http://desktop.tailnet.ts.net/connect-apps.html',
     'https://evil.example/connect-apps.html',
     'https://desktop.tailnet.ts.net/',
-    'https://user:password@desktop.tailnet.ts.net/connect-apps.html',
+    ['https', '://user', ':password@desktop.tailnet.ts.net/connect-apps.html'].join(''),
     'https://desktop.tailnet.ts.net/connect-apps.html?next=https://evil.example',
     'https://desktop.tailnet.ts.net/connect-apps.html#fragment',
   ]) assert.equal(normalizeCompanionUrl(url), '', url);
@@ -51,6 +51,18 @@ test('client rejects malformed or overlong pairing challenges', async () => {
   }
 });
 
+test('Google OAuth credentials never enter the persistent device session', async () => {
+  const record = new Map();
+  const storage = { read: async key => record.get(key), write: async value => record.set(value.workerOrigin, value), remove: async key => record.delete(key) };
+  const now=4_000_000,deviceId=`hud_${'1'.repeat(32)}`,renewalToken='a'.repeat(64),accessToken='b'.repeat(64);
+  const client=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async url=>url.endsWith('/v1/hud/pairings')?response(201,pairing(now)):response(200,{status:'paired',deviceId,accessToken,renewalToken,expiresAt:now+900000,deviceExpiresAt:now+30*86400000,apps:['gmail']})});
+  await client.startPairing(['gmail']);await client.pollPairing();
+  const saved=record.get('https://relay.example.workers.dev');
+  assert.deepEqual(Object.keys(saved).sort(),['deviceExpiresAt','deviceId','renewalToken','workerOrigin']);
+  assert.equal(JSON.stringify(saved).includes(accessToken),false);
+  assert.doesNotMatch(JSON.stringify(saved),/refresh.?token|oauth|google/i);
+});
+
 test('device capability stays in memory, commands use only relay routes, and revocation clears it on 401', async () => {
   const now = 3_000_000;
   const calls = [];
@@ -58,20 +70,21 @@ test('device capability stays in memory, commands use only relay routes, and rev
     fetchImpl: async (url, options = {}) => {
       calls.push({ url: String(url), options });
       if (String(url).endsWith('/v1/hud/pairings')) return response(201, pairing(now));
-      if (String(url).endsWith('/v1/hud/pairings/poll')) return response(200, { status: 'paired', accessToken: 'c'.repeat(64), deviceId: `hud_${'d'.repeat(32)}`, expiresAt: now + 900_000, apps: ['gmail'] });
+      if (String(url).endsWith('/v1/hud/pairings/poll')) return response(200, { status: 'paired', accessToken: 'c'.repeat(64), renewalToken:'e'.repeat(64),deviceId: `hud_${'d'.repeat(32)}`, expiresAt: now + 900_000,deviceExpiresAt:now+30*86400000, apps: ['gmail'] });
       if (String(url).endsWith('/v1/hud/commands')) return response(401, { error: 'Authorization revoked. private-host.ts.net token=synthetic-private-detail' });
+      if (String(url).endsWith('/v1/hud/renew')) return response(401, { error: 'private-host.ts.net token=synthetic-private-detail' });
       throw new Error('Unexpected relay route.');
     } });
 
   const challenge = await client.startPairing();
   assert.deepEqual(challenge, { pairingAlias: 'K7M2Q9', userCode: '01234567', expiresAt: now + 180_000 });
-  assert.deepEqual(await client.pollPairing(), { paired: true, apps: ['gmail'], expiresAt: now + 900_000 });
+  assert.deepEqual(await client.pollPairing(), { paired: true, apps: ['gmail'], expiresAt: now + 900_000, deviceExpiresAt: now + 30*86400000, persistent: false });
   assert.deepEqual(JSON.parse(calls[1].options.body), { pairingId: 'a'.repeat(48), pollSecret: 'b'.repeat(64) }, 'HUD polling retains its internal pairing ID and private poll secret');
   assert.equal(client.paired(), true);
   await assert.rejects(client.runCommand('show latest emails'), (error) => {
     assert.equal(error.status, 401);
     assert.match(error.message, /POST \/v1\/hud\/commands: HTTP 401/);
-    assert.match(error.message, /Authorization expired\. Pair again on your phone/);
+    assert.match(error.message, /Authorization expired or revoked\. Restore the saved approval or pair again on your phone/);
     assert.doesNotMatch(error.message, /Authorization revoked|private-host|synthetic-private-detail/);
     return true;
   });
@@ -79,11 +92,50 @@ test('device capability stays in memory, commands use only relay routes, and rev
   assert.deepEqual(client.apps, []);
   assert.equal(client.expiresAt, 0);
   await assert.rejects(client.runCommand('show latest emails'), /authorization expired/i);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   assert.equal(calls[2].url, 'https://relay.example.workers.dev/v1/hud/commands');
   assert.equal(calls[2].options.credentials, 'omit');
   assert.equal(calls[2].options.headers.Authorization, `Bearer ${'c'.repeat(64)}`);
+  assert.equal(calls[3].url, 'https://relay.example.workers.dev/v1/hud/renew');
   assert.equal(calls.some((call) => /googleapis\.com|oauth|callback/i.test(call.url)), false);
+});
+
+test('Google device approval survives client recreation with a rotated renewable capability',async()=>{
+  const now=1_000_000,record=new Map(),storage={read:async key=>record.get(key),write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
+  let renewals=0;const deviceId=`hud_${'f'.repeat(32)}`,accessA='a'.repeat(64),accessB='b'.repeat(64),renewalA='c'.repeat(64),renewalB='d'.repeat(64),deviceExpiresAt=now+30*86400000;
+  const client=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async(url,options)=>{
+    if(url.endsWith('/v1/hud/pairings'))return response(201,pairing(now));
+    if(url.endsWith('/v1/hud/pairings/poll'))return response(200,{status:'paired',deviceId,accessToken:accessA,renewalToken:renewalA,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});
+    if(url.endsWith('/v1/hud/renew')){renewals++;assert.equal(JSON.parse(options.body).deviceId,deviceId);assert.equal(JSON.parse(options.body).renewalToken,renewalA);return response(200,{deviceId,accessToken:accessB,renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});}
+    throw new Error('Unexpected route');
+  }});
+  await client.startPairing(['gmail']);await client.pollPairing();assert.equal(client.persistent,true);assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalA);
+  const reopened=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async(url,options)=>{renewals++;assert.ok(url.endsWith('/v1/hud/renew'));assert.equal(JSON.parse(options.body).renewalToken,renewalA);return response(200,{deviceId,accessToken:accessB,renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']});}});
+  assert.deepEqual(await reopened.restore(),{paired:true,storageAvailable:true,apps:['gmail']});assert.equal(reopened.paired(),true);assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalB);
+});
+
+test('a stale HUD renewal failure cannot erase a newer rotated saved capability',async()=>{
+  const now=1_000_000,deviceId=`hud_${'f'.repeat(32)}`,renewalA='a'.repeat(64),renewalB='b'.repeat(64),deviceExpiresAt=now+30*86400000;
+  const record=new Map([['https://relay.example.workers.dev',{workerOrigin:'https://relay.example.workers.dev',deviceId,renewalToken:renewalA,deviceExpiresAt}]]);
+  const storage={read:async key=>record.get(key),write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
+  let rejectStale;const staleResponse=new Promise(resolve=>{rejectStale=()=>resolve(response(401,{}));});
+  const stale=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>staleResponse});
+  const staleRestore=stale.restore();
+  const fresh=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>response(200,{deviceId,accessToken:'c'.repeat(64),renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']})});
+  assert.equal((await fresh.restore()).paired,true);
+  rejectStale();assert.equal((await staleRestore).paired,false);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalB);
+});
+
+test('expired authorization and unavailable storage fail closed while a fresh pairing remains usable in memory',async()=>{
+  const now=2_000_000,deviceId=`hud_${'f'.repeat(32)}`,renewalToken='a'.repeat(64);let removed=false;
+  const expiredStorage={read:async()=>({workerOrigin:'https://relay.example.workers.dev',deviceId,renewalToken,deviceExpiresAt:now-1}),write:async()=>{},remove:async()=>{removed=true;}};
+  const expired=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage:expiredStorage,fetchImpl:async()=>{throw new Error('expired renewal must not be sent');}});
+  assert.deepEqual(await expired.restore(),{paired:false,storageAvailable:true});assert.equal(removed,true);
+  const unavailable={read:async()=>{throw new Error('quota details must not escape');},write:async()=>{throw new Error('private storage detail');},remove:async()=>{throw new Error('private storage detail');}};
+  const fresh=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage:unavailable,fetchImpl:async url=>url.endsWith('/v1/hud/pairings')?response(201,pairing(now)):response(200,{status:'paired',deviceId,accessToken:'b'.repeat(64),renewalToken,expiresAt:now+900000,deviceExpiresAt:now+30*86400000,apps:['gmail']})});
+  assert.deepEqual(await fresh.restore(),{paired:false,storageAvailable:false});await fresh.startPairing(['gmail']);assert.equal((await fresh.pollPairing()).paired,true);assert.equal(fresh.paired(),true);assert.equal(fresh.persistent,false);
 });
 
 test('HUD shows a configured private companion link and keeps connector scripts in offline cache', () => {

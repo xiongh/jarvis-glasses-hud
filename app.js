@@ -356,6 +356,12 @@
   function createGoogleAppsActions({ state, connector, hud, render = () => {} }) {
     const redraw = () => render(hud.snapshot());
     return {
+      async restore() {
+        if(!connector?.restore)return;
+        state.busy=true;state.status='Restoring saved Google Apps approval…';redraw();
+        try { const value=await connector.restore();state.status=value.paired?`Connected: ${value.apps.join(', ')}. Approval expires after 30 days.`:value.transient?'Saved approval could not be checked. Check network and retry.':value.storageAvailable?'No saved Google Apps approval. Start phone approval.':'Persistent browser storage is unavailable. Pairing works until this session expires.'; }
+        finally { state.busy=false;redraw(); }
+      },
       async startPairing() {
         state.busy = true; state.status = 'Creating a short-lived pairing request…'; redraw();
         try { state.pairing = await connector.startPairing(); state.status = 'Approve this pairing in Apps & Connections on your iPhone.'; }
@@ -366,7 +372,7 @@
         state.busy = true; state.status = 'Checking phone approval…'; redraw();
         try {
           const value = await connector.pollPairing();
-          state.status = value.paired ? `Connected for this session: ${value.apps.join(', ')}.` : 'Waiting for owner approval on the phone.';
+          state.status = value.paired ? value.persistent ? `Connected: ${value.apps.join(', ')}. Approval expires after 30 days.` : `Connected for this session: ${value.apps.join(', ')}. Browser storage is unavailable; approval lasts at most 15 minutes.` : 'Waiting for owner approval on the phone.';
           if (value.paired) state.pairing = null;
         } catch (error) { state.status = error.message || 'Pairing check failed.'; }
         finally { state.busy = false; redraw(); }
@@ -552,7 +558,8 @@
       }
       if (state.screen === 'connect-apps') {
         const connectorStatus = make('p', 'status', googleConnectorState.status); connectorStatus.setAttribute('role', 'status'); connectorStatus.setAttribute('aria-live', 'polite');
-        outlet.append(make('h1', '', 'GOOGLE APPS'), connectorStatus, make('p', 'copy', 'Google grants remain on the private JARVIS backend. Pairing is short-lived; the glasses receive only a temporary read-only device authorization.'));
+        outlet.append(make('h1', '', 'GOOGLE APPS'), connectorStatus, make('p', 'copy', 'Google grants remain on the private JARVIS backend. Glasses approval renews short-lived read-only access and expires after 30 days.'));
+        if(googleConnectors?.available()&&!googleConnectors.paired()&&!googleConnectorState.busy){const restore=make('button','action','RESTORE SAVED APPROVAL');restore.type='button';restore.dataset.connectorsFocus='true';bindConnectAppsAction(restore,()=>{void googleAppsActions.restore();});outlet.append(restore);}
         if (phoneCompanionUrl) {
           const phone = make('a', 'action', 'OPEN APPS & CONNECTIONS ON IPHONE'); phone.href = phoneCompanionUrl; phone.target = '_blank'; phone.rel = 'noopener noreferrer'; phone.dataset.connectorsFocus = 'true';
           outlet.append(phone, make('p', 'copy', 'This private link requires your JARVIS Tailscale connection and an unlocked owner session.'));
@@ -571,7 +578,7 @@
             outlet.append(poll);
           }
         } else if(googleConnectors?.paired()) {
-          googleConnectorState.status=`Paired for this session: ${googleConnectors.apps.join(', ')}.`;outlet.append(make('p','copy',googleConnectorState.status));
+          outlet.append(make('p','copy',`Connected: ${googleConnectors.apps.join(', ')}. Approval expires after 30 days.`));
           const form=document.createElement('form');form.className='hud-youtube-search';const input=document.createElement('input');input.type='text';input.maxLength=1200;input.placeholder='Ask about Gmail, Calendar, Contacts, Drive, Docs, Sheets, or Tasks';input.setAttribute('aria-label','Google Apps command');input.dataset.connectorsFocus='true';const run=make('button','action','ASK JARVIS');run.type='submit';run.dataset.connectorsFocus='true';run.disabled=googleConnectorState.busy;form.addEventListener('submit',event=>{event.preventDefault();const command=input.value.trim();if(!command||googleConnectorState.busy)return;void googleAppsActions.runCommand(command);});form.append(input,run);outlet.append(form);if(googleConnectorState.result){const result=make('pre','copy',googleConnectorState.result);result.setAttribute('aria-label','Google Apps response');outlet.append(result);}const reconnect=make('button','action','CLEAR SESSION');reconnect.type='button';reconnect.dataset.connectorsFocus='true';bindConnectAppsAction(reconnect,()=>googleAppsActions.clear());outlet.append(reconnect);
         }
         const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.dataset.connectorsFocus = 'true'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
@@ -723,6 +730,7 @@
     });
     globalThis.addEventListener?.('popstate', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); });
     hud.render();
+    void googleAppsActions.restore();
     void restoreYoutubeSession().catch(() => { youtubeState.sessionReady = true; youtubeState.sessionVerified = false; youtubeState.status = 'Could not verify the saved YouTube session. Check the connection and retry.'; render(hud.snapshot()); });
     return hud;
   }
