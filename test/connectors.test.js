@@ -209,4 +209,6 @@ test('HUD shows a configured private companion link and keeps connector scripts 
   assert.match(worker, /'\.\/auth-config\.js', '\.\/unlock\.html', '\.\/unlock\.js'/);
   assert.match(worker, /caches\.open\(CACHE\).*cache\.match/);
   assert.doesNotMatch(worker, /caches\.match\(event\.request\)/);
+  assert.match(worker, /await self\.skipWaiting\(\)/, 'a complete verified cache activates without waiting for a hard refresh');
+  assert.match(worker, /filter\(\(key\) => key !== CACHE\)/, 'activation removes obsolete release caches after the new cache is complete');
 });

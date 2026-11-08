@@ -87,7 +87,7 @@ test('release updater detects a newer Pages build and reloads only after explici
   assert.equal(target.location.reloads, 1);
 });
 
-test('reload button can refresh after a new worker activates in another app window', () => {
+test('an activated verified worker automatically reloads an old page into its own release cache', () => {
   const current = 'a'.repeat(40); const next = 'b'.repeat(40);
   const status = { textContent: '' }; const version = { dataset: { buildId: current }, textContent: `BUILD ${current}` };
   const document = new Target(); document.getElementById = (id) => ({ 'hud-update-status': status, 'hud-build-version': version }[id]);
@@ -102,8 +102,9 @@ test('reload button can refresh after a new worker activates in another app wind
   hud.registerHudUpdates({ serviceWorker, onLine: true }, target, document);
   serviceWorker.dispatch('message', { data: { type: 'JARVIS_HUD_UPDATE_ACTIVATED', buildId: next } });
   assert.equal(reload.hidden, false);
-  reload.click();
   assert.equal(target.location.reloads, 1);
+  serviceWorker.dispatch('message', { data: { type: 'JARVIS_HUD_UPDATE_ACTIVATED', buildId: next } });
+  assert.equal(target.location.reloads, 1, 'an update message cannot cause a reload loop');
   } finally { globalThis.fetch = previousFetch; }
 });
 

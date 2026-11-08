@@ -272,9 +272,13 @@
         if (activatedBuildId && activatedBuildId !== currentBuild()) {
           activatedUpdateId = activatedBuildId;
           showReload(true);
+          // The worker has already verified and activated its complete cache.
+          // Reload once so this old JavaScript cannot continue beside the new
+          // controller and make normal reloads depend on a hard refresh.
+          reloadRequested = true;
+          reloadAfterActivation();
         }
-        if (reloadRequested) reloadAfterActivation();
-        else if (activatedUpdateId) show('A Pages-verified JARVIS update is ready. Choose RELOAD LATEST when convenient.');
+        else if (reloadRequested) reloadAfterActivation();
       }
     });
     target.addEventListener?.('online', () => { show(''); check(); });
