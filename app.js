@@ -299,7 +299,7 @@
   }
 
   function handleUpdateControlsKey(event, documentObject = globalThis.document) {
-    const group = event.target?.closest?.('[data-update-controls]') || documentObject?.activeElement?.closest?.('[data-update-controls]');
+    const group = event.target?.closest?.('[data-update-controls]');
     if (!group) return false;
     const controls = [...(group.querySelectorAll?.('[data-update-focus]:not(:disabled):not([hidden])') || [])];
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
@@ -621,7 +621,7 @@
           }
         } else if(googleConnectors?.paired()) {
           outlet.append(make('p','copy',`Connected: ${googleConnectors.apps.join(', ')}. Approval expires after 30 days.`));
-          const form=document.createElement('form');form.className='hud-youtube-search';const input=document.createElement('input');input.type='text';input.maxLength=1200;input.placeholder='Ask about Gmail, Calendar, Contacts, Drive, Docs, Sheets, or Tasks';input.setAttribute('aria-label','Google Apps command');input.dataset.connectorsFocus='true';const run=make('button','action','ASK JARVIS');run.type='submit';run.dataset.connectorsFocus='true';run.disabled=googleConnectorState.busy;form.addEventListener('submit',event=>{event.preventDefault();const command=input.value.trim();if(!command||googleConnectorState.busy)return;void googleAppsActions.runCommand(command);});form.append(input,run);outlet.append(form);if(googleConnectorState.result){const result=make('pre','copy',googleConnectorState.result);result.setAttribute('aria-label','Google Apps response');outlet.append(result);}const reconnect=make('button','action','CLEAR SESSION');reconnect.type='button';reconnect.dataset.connectorsFocus='true';bindConnectAppsAction(reconnect,()=>googleAppsActions.clear());outlet.append(reconnect);
+          const form=document.createElement('form');form.className='hud-youtube-search';const input=document.createElement('input');input.type='text';input.maxLength=1200;input.placeholder='Ask about Gmail, Calendar, Contacts, Drive, Docs, Sheets, or Tasks';input.setAttribute('aria-label','Google Apps command');input.dataset.connectorsFocus='true';input.dataset.googleCommand='true';const run=make('button','action','ASK JARVIS');run.type='submit';run.dataset.connectorsFocus='true';run.disabled=googleConnectorState.busy;form.addEventListener('submit',event=>{event.preventDefault();const command=input.value.trim();if(!command||googleConnectorState.busy)return;googleConnectorState.restoreCommandFocus=true;void googleAppsActions.runCommand(command);});form.append(input,run);outlet.append(form);if(googleConnectorState.restoreCommandFocus){googleConnectorState.restoreCommandFocus=false;queueMicrotask(()=>input.focus?.());}if(googleConnectorState.result){const result=make('pre','copy',googleConnectorState.result);result.setAttribute('aria-label','Google Apps response');outlet.append(result);}const reconnect=make('button','action','CLEAR SESSION');reconnect.type='button';reconnect.dataset.connectorsFocus='true';bindConnectAppsAction(reconnect,()=>googleAppsActions.clear());outlet.append(reconnect);
         }
         const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.dataset.connectorsFocus = 'true'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
       }

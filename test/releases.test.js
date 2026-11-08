@@ -158,6 +158,20 @@ test('glasses arrow and Enter controls can operate the release actions', () => {
   assert.equal(clicked, 1);
 });
 
+test('a stale Check Updates focus cannot trap glasses navigation after a Google response redraw', () => {
+  const hudState = require('../app').createHud(); hudState.select(); hudState.move(3); hudState.select();
+  const document = { activeElement: null };
+  const staleUpdate = button(false, document); const updateGroup = { querySelectorAll: () => [staleUpdate] };
+  document.activeElement = staleUpdate;
+  const googleInput = button(false, document); const outlet = { querySelectorAll: () => [googleInput] };
+  const event = { key: 'ArrowDown', target: { closest: () => null }, prevented: false, preventDefault() { this.prevented = true; } };
+  assert.equal(hud.handleUpdateControlsKey(event, document), false);
+  assert.equal(hud.handleConnectAppsKey(event, { hud: hudState, outlet, document }), true);
+  assert.equal(event.prevented, true);
+  assert.equal(document.activeElement, googleInput);
+  assert.notEqual(event.target.closest('[data-update-controls]'), updateGroup);
+});
+
 test('Google Calendar response text is displayed unchanged by the HUD client', async () => {
   const state = { busy: false, result: '', status: '' };
   const formatted = '1. Today, 2:00 PM — Synthetic event';

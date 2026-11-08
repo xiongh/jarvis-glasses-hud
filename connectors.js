@@ -6,7 +6,6 @@
     const command=String(value||'').trim().replace(/^jarvis\b[\s,.:;-]*/i,'');
     const lower=command.toLowerCase();
     if(/^(?:hi|hello|hey)(?:\s+jarvis)?[!?.\s]*$/i.test(command))return 'Hello. I can read your connected Gmail, Calendar, Contacts, Drive, Docs, Sheets, and Tasks. Try “show my latest five emails” or “what is on my calendar?”';
-    if(/\b(?:first|oldest|earliest)\b[\s\w]*\b(?:e-?mails?|gmail|inbox|mail|messages?)\b|\b(?:e-?mails?|gmail|inbox|mail|messages?)\b[\s\w]*\b(?:first|oldest|earliest)\b/i.test(lower))return '“First email” could mean newest or oldest. Say “show my latest five emails” for newest messages. Oldest-message search is not supported, so JARVIS will not substitute newest messages silently.';
     if(!/\b(?:calendar|meetings?|appointments?|events?|e-?mails?|gmail|inbox|mail|messages?|contact|contacts|phone number|email address|spreadsheets?|sheets?|documents?|docs?|drive|file|files|folder|task|tasks|to-do|todo|reminder)\b/i.test(lower))return 'I can help with read-only Gmail, Calendar, Contacts, Drive, Docs, Sheets, and Tasks requests. Try “show my latest five emails” or “what is on my calendar?”';
     return '';
   }

@@ -23,14 +23,18 @@ test('companion URL accepts only HTTPS Tailscale Apps & Connections paths', () =
   ]) assert.equal(normalizeCompanionUrl(url), '', url);
 });
 
-test('greetings, ambiguous first-email requests, and unsupported conversation never reach the Google relay', async () => {
+test('greetings and unsupported conversation never reach the Google relay, while oldest-email requests do', async () => {
   let calls = 0;
   const client = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, fetchImpl: async () => { calls += 1; throw new Error('must not call relay'); } });
-  for (const command of ['Hi', 'Hello JARVIS', 'What is my first email?', 'Tell me a joke']) {
+  for (const command of ['Hi', 'Hello JARVIS', 'Tell me a joke']) {
     const reply = await client.runCommand(command);
-    assert.match(reply, /Hello|First email|I can help/i, command);
+    assert.match(reply, /Hello|I can help/i, command);
   }
   assert.equal(calls, 0);
+  const now = 3_000_000;
+  const oldest = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now, fetchImpl: async (url) => { const path=String(url); if(path.endsWith('/renew'))return response(200,{ deviceId: `hud_${'a'.repeat(32)}`, accessToken: 'b'.repeat(64), renewalToken: 'c'.repeat(64), expiresAt: now + 900_000, deviceExpiresAt: now + 30 * 86400000, apps: ['gmail'] }); if(path.endsWith('/commands'))return response(200,{jobId:'d'.repeat(40)}); return response(200,{status:'complete',result:{content:'Oldest email'}}); }, storage: { read: async () => ({ workerOrigin: 'https://relay.example.workers.dev', deviceId: `hud_${'a'.repeat(32)}`, renewalToken: 'a'.repeat(64), deviceExpiresAt: now + 30 * 86400000 }), write: async () => {}, remove: async () => {} } });
+  await oldest.restore();
+  assert.equal(await oldest.runCommand('What is my first email?'), 'Oldest email');
   assert.match(commandHelp('Show my latest five emails'), /^$/);
 });
 
