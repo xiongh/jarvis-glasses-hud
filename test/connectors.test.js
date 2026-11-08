@@ -118,14 +118,38 @@ test('a stale HUD renewal failure cannot erase a newer rotated saved capability'
   const now=1_000_000,deviceId=`hud_${'f'.repeat(32)}`,renewalA='a'.repeat(64),renewalB='b'.repeat(64),deviceExpiresAt=now+30*86400000;
   const record=new Map([['https://relay.example.workers.dev',{workerOrigin:'https://relay.example.workers.dev',deviceId,renewalToken:renewalA,deviceExpiresAt}]]);
   const storage={read:async key=>record.get(key),write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
-  let rejectStale;const staleResponse=new Promise(resolve=>{rejectStale=()=>resolve(response(401,{}));});
-  const stale=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>staleResponse});
-  const staleRestore=stale.restore();
+  let rejectStale,staleStarted;const staleResponse=new Promise(resolve=>{rejectStale=()=>resolve(response(401,{}));});const staleStart=new Promise(resolve=>{staleStarted=resolve;});
+  const stale=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>{staleStarted();return staleResponse;}});
+  const staleRestore=stale.restore();await staleStart;
   const fresh=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>response(200,{deviceId,accessToken:'c'.repeat(64),renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt,apps:['gmail']})});
   assert.equal((await fresh.restore()).paired,true);
   rejectStale();assert.equal((await staleRestore).paired,false);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalB);
+});
+
+test('concurrent startup restores share one slow IndexedDB and renewal request',async()=>{
+  const now=1_000_000,deviceId=`hud_${'9'.repeat(32)}`,renewal='a'.repeat(64),record=new Map([['https://relay.example.workers.dev',{workerOrigin:'https://relay.example.workers.dev',deviceId,renewalToken:renewal,deviceExpiresAt:now+30*86400000}]]);
+  let releaseRead,renewCalls=0;const slowRead=new Promise(resolve=>{releaseRead=resolve;});
+  const storage={read:async key=>{await slowRead;return record.get(key);},write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
+  const client=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>{renewCalls++;return response(200,{deviceId,accessToken:'b'.repeat(64),renewalToken:'c'.repeat(64),expiresAt:now+900000,deviceExpiresAt:now+30*86400000,apps:['gmail']});}});
+  const first=client.restore(),second=client.restore();releaseRead();
+  assert.equal((await first).paired,true);assert.equal((await second).paired,true);assert.equal(renewCalls,1);
+});
+
+test('a reopening stale tab re-reads a capability rotated by another tab before showing signed out',async()=>{
+  const now=1_000_000,deviceId=`hud_${'8'.repeat(32)}`,renewalA='a'.repeat(64),renewalB='b'.repeat(64),renewalC='c'.repeat(64),record=new Map([['https://relay.example.workers.dev',{workerOrigin:'https://relay.example.workers.dev',deviceId,renewalToken:renewalA,deviceExpiresAt:now+30*86400000}]]);
+  const storage={read:async key=>record.get(key),write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
+  let rejectStale;const staleWait=new Promise(resolve=>{rejectStale=()=>resolve(response(401,{}));});
+  const stale=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async(url,options)=>JSON.parse(options.body).renewalToken===renewalA?staleWait:response(200,{deviceId,accessToken:'d'.repeat(64),renewalToken:renewalC,expiresAt:now+900000,deviceExpiresAt:now+30*86400000,apps:['gmail']})});
+  const fresh=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage,fetchImpl:async()=>response(200,{deviceId,accessToken:'e'.repeat(64),renewalToken:renewalB,expiresAt:now+900000,deviceExpiresAt:now+30*86400000,apps:['gmail']})});
+  const staleResult=stale.restore();assert.equal((await fresh.restore()).paired,true);rejectStale();assert.equal((await staleResult).transient,true);assert.equal((await stale.restore()).paired,true);assert.equal(record.get('https://relay.example.workers.dev').renewalToken,renewalC);
+});
+
+test('temporary offline restoration keeps the saved capability for an automatic retry',async()=>{
+  const now=1_000_000,deviceId=`hud_${'7'.repeat(32)}`,renewal='a'.repeat(64),saved={workerOrigin:'https://relay.example.workers.dev',deviceId,renewalToken:renewal,deviceExpiresAt:now+30*86400000};let removed=false;
+  const client=createGoogleConnectorClient({workerOrigin:'https://relay.example.workers.dev',enabled:true,now:()=>now,storage:{read:async()=>saved,write:async()=>{},remove:async()=>{removed=true;}},fetchImpl:async()=>{throw new Error('offline');}});
+  assert.deepEqual(await client.restore(),{paired:false,storageAvailable:true,transient:true});assert.equal(removed,false);
 });
 
 test('expired authorization and unavailable storage fail closed while a fresh pairing remains usable in memory',async()=>{
@@ -152,4 +176,6 @@ test('HUD shows a configured private companion link and keeps connector scripts 
   assert.match(config, /phoneCompanionUrl: 'https:\/\/[a-z0-9.-]+\.ts\.net\/connect-apps\.html'/);
   assert.match(worker, /'\.\/connectors-config\.js', '\.\/connectors\.js'/);
   assert.match(worker, /'\.\/auth-config\.js', '\.\/unlock\.html', '\.\/unlock\.js'/);
+  assert.match(worker, /caches\.open\(CACHE\).*cache\.match/);
+  assert.doesNotMatch(worker, /caches\.match\(event\.request\)/);
 });

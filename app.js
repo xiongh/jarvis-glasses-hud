@@ -355,8 +355,24 @@
 
   function createGoogleAppsActions({ state, connector, hud, render = () => {} }) {
     const redraw = () => render(hud.snapshot());
-    return {
+    let restoreInFlight = null;
+    let retryCount = 0;
+    const retry = () => {
+      if (retryCount >= 3 || globalThis.navigator?.onLine === false) return;
+      const delay = 1000 * (2 ** retryCount++);
+      setTimeout(() => { void api.restore(); }, delay);
+    };
+    const api = {
       async restore() {
+        if (restoreInFlight) return restoreInFlight;
+        if (!connector?.restore) return;
+        state.busy = true; state.restoring = true; state.status = 'Restoring saved Google Apps approval…'; redraw();
+        restoreInFlight = Promise.resolve(connector.restore()).then((value) => {
+          if (value.paired) { retryCount = 0; state.restoring = false; state.status = `Connected: ${value.apps.join(', ')}. Approval expires after 30 days.`; }
+          else if (value.transient) { state.status = 'Saved approval is waiting for a connection. Retrying automatically…'; retry(); }
+          else { state.restoring = false; state.status = value.storageAvailable ? 'No saved Google Apps approval. Start phone approval.' : 'Persistent browser storage is unavailable. Pairing works until this session expires.'; }
+        }).catch(() => { state.status = 'Saved approval is waiting for a connection. Retrying automatically…'; retry(); }).finally(() => { state.busy = false; restoreInFlight = null; redraw(); });
+        return restoreInFlight;
         if(!connector?.restore)return;
         state.busy=true;state.status='Restoring saved Google Apps approval…';redraw();
         try { const value=await connector.restore();state.status=value.paired?`Connected: ${value.apps.join(', ')}. Approval expires after 30 days.`:value.transient?'Saved approval could not be checked. Check network and retry.':value.storageAvailable?'No saved Google Apps approval. Start phone approval.':'Persistent browser storage is unavailable. Pairing works until this session expires.'; }
@@ -387,6 +403,7 @@
         connector.clear(); state.pairing = null; state.result = ''; state.status = 'Authorization cleared from this glasses session.'; redraw();
       },
     };
+    return api;
   }
 
   function bindConnectAppsAction(element, action) {
@@ -421,6 +438,11 @@
     const googleConnectors = globalThis.jarvisGoogleConnectors?.createGoogleConnectorClient({ workerOrigin: relayConfig.workerOrigin, enabled: relayConfig.enabled === true });
     const phoneCompanionUrl = globalThis.jarvisGoogleConnectors?.normalizeCompanionUrl?.(relayConfig.phoneCompanionUrl) || '';
     const googleConnectorState = { status: googleConnectors?.available() ? 'Not paired. Start a short-lived phone approval.' : 'Google Apps relay is not configured in this HUD release.', pairing: null, busy: false, result: '' };
+    if (googleConnectors?.available()) {
+      googleConnectorState.status = 'Restoring saved Google Apps approval…';
+      googleConnectorState.busy = true;
+      googleConnectorState.restoring = true;
+    }
     const youtubeState = { section: 'subscriptions', status: 'Checking saved YouTube connection…', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null, sessionReady: false, sessionVerified: false, needsReauth: false, loadSucceeded: false, initialLoadPending: false, errorCode: '' };
     const youtubeRequestGate = createRequestGate();
     let youtubePlayer = null;
@@ -559,12 +581,12 @@
       if (state.screen === 'connect-apps') {
         const connectorStatus = make('p', 'status', googleConnectorState.status); connectorStatus.setAttribute('role', 'status'); connectorStatus.setAttribute('aria-live', 'polite');
         outlet.append(make('h1', '', 'GOOGLE APPS'), connectorStatus, make('p', 'copy', 'Google grants remain on the private JARVIS backend. Glasses approval renews short-lived read-only access and expires after 30 days.'));
-        if(googleConnectors?.available()&&!googleConnectors.paired()&&!googleConnectorState.busy){const restore=make('button','action','RESTORE SAVED APPROVAL');restore.type='button';restore.dataset.connectorsFocus='true';bindConnectAppsAction(restore,()=>{void googleAppsActions.restore();});outlet.append(restore);}
+        if(googleConnectors?.available()&&!googleConnectors.paired()&&!googleConnectorState.busy&&!googleConnectorState.restoring){const restore=make('button','action','RESTORE SAVED APPROVAL');restore.type='button';restore.dataset.connectorsFocus='true';bindConnectAppsAction(restore,()=>{void googleAppsActions.restore();});outlet.append(restore);}
         if (phoneCompanionUrl) {
           const phone = make('a', 'action', 'OPEN APPS & CONNECTIONS ON IPHONE'); phone.href = phoneCompanionUrl; phone.target = '_blank'; phone.rel = 'noopener noreferrer'; phone.dataset.connectorsFocus = 'true';
           outlet.append(phone, make('p', 'copy', 'This private link requires your JARVIS Tailscale connection and an unlocked owner session.'));
         } else outlet.append(make('p', 'copy', 'Phone companion URL is not configured for this HUD release.'));
-        if (googleConnectors?.available() && !googleConnectors.paired()) {
+        if (googleConnectors?.available() && !googleConnectors.paired() && !googleConnectorState.restoring) {
           const start = make('button', 'action', googleConnectorState.busy ? 'PLEASE WAIT' : 'START PHONE APPROVAL'); start.type = 'button'; start.disabled = googleConnectorState.busy; start.dataset.connectorsFocus = 'true';
           bindConnectAppsAction(start, () => { void googleAppsActions.startPairing(); });
           outlet.append(start);
@@ -731,6 +753,7 @@
     globalThis.addEventListener?.('popstate', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); });
     hud.render();
     void googleAppsActions.restore();
+    globalThis.addEventListener?.('online', () => { if (!googleConnectors?.paired()) void googleAppsActions.restore(); });
     void restoreYoutubeSession().catch(() => { youtubeState.sessionReady = true; youtubeState.sessionVerified = false; youtubeState.status = 'Could not verify the saved YouTube session. Check the connection and retry.'; render(hud.snapshot()); });
     return hud;
   }

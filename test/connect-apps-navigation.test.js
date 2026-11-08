@@ -127,3 +127,22 @@ test('pairing errors and expired requests update status without navigating away'
   assert.equal(expiryState.busy, false);
   assert.equal(hud.snapshot().screen, 'connect-apps');
 });
+
+test('startup stays restoring during a slow saved-approval check and redraws connected automatically', async () => {
+  const hud = makeAppsHud();
+  let complete;
+  const delayed = new Promise((resolve) => { complete = resolve; });
+  const state = { status: 'Restoring saved Google Apps approval…', pairing: null, busy: true, restoring: true, result: '' };
+  const renders = [];
+  const actions = createGoogleAppsActions({ state, connector: { restore: async () => delayed }, hud, render: () => renders.push({ status: state.status, restoring: state.restoring, busy: state.busy }) });
+  const first = actions.restore();
+  const duplicate = actions.restore();
+  assert.equal(state.restoring, true);
+  assert.match(state.status, /restoring/i);
+  complete({ paired: true, storageAvailable: true, apps: ['gmail'] });
+  await Promise.all([first, duplicate]);
+  assert.equal(state.restoring, false);
+  assert.equal(state.busy, false);
+  assert.match(state.status, /connected: gmail/i);
+  assert.ok(renders.some((view) => /connected/i.test(view.status)));
+});

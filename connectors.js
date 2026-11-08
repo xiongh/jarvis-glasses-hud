@@ -11,7 +11,7 @@
   function normalizeOrigin(value){try{const u=new URL(String(value||''));if(u.protocol!=='https:'||u.username||u.password||u.pathname!=='/'||u.search||u.hash||!u.hostname.endsWith('.workers.dev'))return'';return u.origin;}catch{return'';}}
   function normalizeCompanionUrl(value){try{const u=new URL(String(value||''));if(u.protocol!=='https:'||u.username||u.password||u.pathname!=='/connect-apps.html'||u.search||u.hash||!u.hostname.endsWith('.ts.net'))return'';return u.href;}catch{return'';}}
   function createGoogleConnectorClient({workerOrigin,enabled=false,fetchImpl=globalThis.fetch,now=Date.now,pollMs=1000,maxWaitMs=45000,requestTimeoutMs=10000,storage=indexedDbSessionStore()}={}){
-    const base=normalizeOrigin(workerOrigin);let pairing=null,deviceToken='',deviceId='',renewalToken='',deviceExpiresAt=0,expiresAt=0,apps=[],persistent=false;
+    const base=normalizeOrigin(workerOrigin);let pairing=null,deviceToken='',deviceId='',renewalToken='',deviceExpiresAt=0,expiresAt=0,apps=[],persistent=false,renewInFlight=null,restoreInFlight=null;
     const request=async(path,{method='GET',body,token=''}={})=>{
       if(!enabled||!base)throw new Error('Google Apps relay is not configured.');
       const diagnosticPath=path.replace(/^\/v1\/hud\/commands\/[a-f0-9]{40}$/, '/v1/hud/commands/:jobId');
@@ -34,10 +34,36 @@
     // renewal. This matters because renewal capabilities are single-use.
     const clear=()=>{const savedRenewalToken=renewalToken;pairing=null;deviceToken='';deviceId='';renewalToken='';deviceExpiresAt=0;expiresAt=0;apps=[];persistent=false;void (async()=>{try{const saved=await storage.read(base);if(!savedRenewalToken||saved?.renewalToken===savedRenewalToken)await storage.remove(base);}catch{}})();};
     const acceptRenewal=async value=>{if(typeof value.deviceId!=='string'||!/^hud_[a-f0-9]{32}$/.test(value.deviceId)||typeof value.accessToken!=='string'||!/^[a-f0-9]{64}$/.test(value.accessToken)||typeof value.renewalToken!=='string'||!/^[a-f0-9]{64}$/.test(value.renewalToken)||!Number.isFinite(value.expiresAt)||value.expiresAt<=now()||value.expiresAt>now()+910000||!Number.isFinite(value.deviceExpiresAt)||value.deviceExpiresAt<value.expiresAt||value.deviceExpiresAt>now()+DEVICE_TTL_MS||!Array.isArray(value.apps)||!value.apps.length||value.apps.some(app=>!APPS.includes(app)))throw new Error('Relay returned an invalid device renewal.');deviceId=value.deviceId;deviceToken=value.accessToken;renewalToken=value.renewalToken;expiresAt=value.expiresAt;deviceExpiresAt=value.deviceExpiresAt;apps=[...value.apps];await persist();return true;};
-    const renew=async()=>{if(!deviceId||!renewalToken||deviceExpiresAt<=now()){clear();return false;}try{return await acceptRenewal(await request('/v1/hud/renew',{method:'POST',body:{deviceId,renewalToken}}));}catch(error){if(error.status===401){clear();return false;}throw error;}};
+    const renew=async()=>{
+      if(renewInFlight)return renewInFlight;
+      renewInFlight=(async()=>{
+        if(!deviceId||!renewalToken||deviceExpiresAt<=now()){clear();return false;}
+        try{return await acceptRenewal(await request('/v1/hud/renew',{method:'POST',body:{deviceId,renewalToken}}));}
+        catch(error){if(error.status===401){clear();return false;}throw error;}
+      })().finally(()=>{renewInFlight=null;});
+      return renewInFlight;
+    };
     return Object.freeze({
       available:()=>Boolean(enabled&&base),paired:()=>Boolean(deviceToken&&expiresAt>now()),get apps(){return [...apps];},get expiresAt(){return expiresAt;},get persistent(){return persistent;},clear,
-      restore:async()=>{let saved;try{saved=await storage.read(base);}catch{return{paired:false,storageAvailable:false};}if(!saved)return{paired:false,storageAvailable:true};if(saved.workerOrigin!==base||typeof saved.deviceId!=='string'||!/^hud_[a-f0-9]{32}$/.test(saved.deviceId)||typeof saved.renewalToken!=='string'||!/^[a-f0-9]{64}$/.test(saved.renewalToken)||!Number.isFinite(saved.deviceExpiresAt)||saved.deviceExpiresAt<=now()||saved.deviceExpiresAt>now()+DEVICE_TTL_MS){clear();return{paired:false,storageAvailable:true};}deviceId=saved.deviceId;renewalToken=saved.renewalToken;deviceExpiresAt=saved.deviceExpiresAt;try{return{paired:await renew(),storageAvailable:true,apps:[...apps]};}catch{return{paired:false,storageAvailable:true,transient:true};}},
+      restore:async()=>{
+        if(restoreInFlight)return restoreInFlight;
+        restoreInFlight=(async()=>{
+          const validSaved=value=>value&&value.workerOrigin===base&&typeof value.deviceId==='string'&&/^hud_[a-f0-9]{32}$/.test(value.deviceId)&&typeof value.renewalToken==='string'&&/^[a-f0-9]{64}$/.test(value.renewalToken)&&Number.isFinite(value.deviceExpiresAt)&&value.deviceExpiresAt>now()&&value.deviceExpiresAt<=now()+DEVICE_TTL_MS;
+          const load=async()=>{let saved;try{saved=await storage.read(base);}catch{return null;}if(!validSaved(saved))return null;deviceId=saved.deviceId;renewalToken=saved.renewalToken;deviceExpiresAt=saved.deviceExpiresAt;return saved;};
+          let saved=await load();
+          if(!saved){try{const present=await storage.read(base);if(present)clear();return{paired:false,storageAvailable:true};}catch{return{paired:false,storageAvailable:false};}}
+          const attemptedToken=saved.renewalToken;
+          try{
+            if(await renew())return{paired:true,storageAvailable:true,apps:[...apps]};
+            // Another tab may have won the single-use renewal race. Re-read once
+            // before showing a re-pair prompt; clear() never deletes a newer token.
+            saved=await load();
+            if(saved&&saved.renewalToken!==attemptedToken)return{paired:false,storageAvailable:true,transient:true};
+            return{paired:false,storageAvailable:true};
+          }catch{return{paired:false,storageAvailable:true,transient:true};}
+        })().finally(()=>{restoreInFlight=null;});
+        return restoreInFlight;
+      },
       startPairing:async(requested=APPS)=>{if(!enabled||!base)throw new Error('Google Apps relay is not configured.');const selected=[...new Set(requested)];if(!selected.length||selected.some(app=>!APPS.includes(app)))throw new Error('Choose valid Google apps.');clear();const value=await request('/v1/hud/pairings',{method:'POST',body:{apps:selected}});if(typeof value.pairingId!=='string'||!/^[a-f0-9]{48}$/.test(value.pairingId)||typeof value.pairingAlias!=='string'||!/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(value.pairingAlias)||typeof value.pollSecret!=='string'||!/^[a-f0-9]{64}$/.test(value.pollSecret)||!/^[0-9]{8}$/.test(value.userCode)||!Number.isFinite(value.expiresAt)||value.expiresAt<=now()||value.expiresAt>now()+210000)throw new Error('Relay returned an invalid or overlong pairing challenge.');pairing={id:value.pairingId,alias:value.pairingAlias,poll:value.pollSecret,code:value.userCode,expiresAt:value.expiresAt};return {pairingAlias:pairing.alias,userCode:pairing.code,expiresAt:pairing.expiresAt};},
       pollPairing:async()=>{if(!pairing||pairing.expiresAt<=now()){clear();throw new Error('Pairing expired. Start a new request.');}const value=await request('/v1/hud/pairings/poll',{method:'POST',body:{pairingId:pairing.id,pollSecret:pairing.poll}});if(value.status==='pending')return {paired:false};if(value.status!=='paired'){clear();throw new Error('Relay returned an invalid device authorization.');}pairing=null;await acceptRenewal(value);return {paired:true,apps:[...apps],expiresAt,deviceExpiresAt,persistent};},
       runCommand:async(message)=>{if(!deviceToken||expiresAt<=now()){if(!await renew())throw new Error('Glasses authorization expired. Restore the saved approval or pair again on the phone.');}const command=String(message||'').trim();if(!command||command.length>1200)throw new Error('Enter a command of 1 to 1,200 characters.');let queued;try{queued=await request('/v1/hud/commands',{method:'POST',body:{message:command},token:deviceToken});}catch(error){if(error.status!==401||!await renew())throw error;queued=await request('/v1/hud/commands',{method:'POST',body:{message:command},token:deviceToken});}if(typeof queued.jobId!=='string'||!/^[a-f0-9]{40}$/.test(queued.jobId))throw new Error('Relay returned an invalid command receipt.');const end=now()+maxWaitMs;while(now()<end){let result;try{result=await request(`/v1/hud/commands/${queued.jobId}`,{token:deviceToken});}catch(error){if(error.status!==401||!await renew())throw error;result=await request(`/v1/hud/commands/${queued.jobId}`,{token:deviceToken});}if(result.status==='complete'&&typeof result.result?.content==='string')return result.result.content.slice(0,5000);await new Promise(resolve=>setTimeout(resolve,pollMs));}throw new Error('Google lookup is taking too long. Try again.');},
