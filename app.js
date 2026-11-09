@@ -492,7 +492,10 @@
       youtubePlayer = api.createPlayerController({ document, window: globalThis, container: shell, onStateChange: (event) => {
         youtubeState.playerStatus = event.detail || event.state;
         const status = outlet.querySelector('#hud-youtube-player-status'); if (status) status.textContent = youtubeState.playerStatus;
-        if (event.state === 'ready') { if (youtubeState.resumeAt > 0) youtubePlayer?.seek(youtubeState.resumeAt); }
+        if (event.state === 'ready') {
+          if (youtubeState.resumeAt > 0) youtubePlayer?.seek(youtubeState.resumeAt);
+          const play = outlet.querySelector('#hud-youtube-play'); if (play) play.disabled = false;
+        }
         if (event.state === 'playing') {
           if (!youtubeRecordedStart) { youtubeRecordedStart = true; void youtube.record({ ...youtubeState.current, positionSeconds: youtubePlayer?.position() || 0, watchSeconds: youtubePlayer?.position() || 0, durationSeconds: youtubePlayer?.duration() || 0, incrementView: true, kind: youtubeState.current?.kind === 'short' || youtubeState.section === 'shorts' ? 'short' : 'video' }).catch(() => {}); }
           if (!youtubeProgressTimer) youtubeProgressTimer = setInterval(() => { void saveYoutubeProgress(); }, 15_000);
@@ -709,9 +712,16 @@
             accountCard.append(history, favorites, manage); outlet.append(accountCard);
           } else if (youtubeState.current) {
             const title = make('h2', 'hud-youtube-video-title', youtubeState.current.title || 'YouTube video'); outlet.append(title);
-            const shell = make('div', `hud-youtube-player-shell${youtubeState.current.kind === 'short' ? ' is-short' : ''}`, ''); shell.id = 'hud-youtube-player'; shell.setAttribute('aria-label', 'YouTube embedded video player'); outlet.append(shell);
+            // The IFrame API replaces its target node. Keep this outer shell so
+            // the 200×200 minimum viewport and clipping rules survive insertion.
+            const shell = make('div', `hud-youtube-player-shell${youtubeState.current.kind === 'short' ? ' is-short' : ''}`, '');
+            const mount = make('div', '', ''); mount.id = 'hud-youtube-player'; mount.setAttribute('aria-label', 'YouTube embedded video player'); shell.append(mount); outlet.append(shell);
+            const play = make('button', 'action hud-youtube-play', 'PLAY'); play.id = 'hud-youtube-play'; play.type = 'button'; play.disabled = true; play.dataset.youtubeFocus = 'true'; play.addEventListener('click', () => {
+              if (!youtubePlayer?.play()) { youtubeState.playerStatus = 'Player is still loading. Select Play when it is ready.'; const status = outlet.querySelector('#hud-youtube-player-status'); if (status) status.textContent = youtubeState.playerStatus; }
+            }); outlet.append(play);
             const playerStatus = make('p', 'status hud-youtube-player-status', youtubeState.playerStatus); playerStatus.id = 'hud-youtube-player-status'; outlet.append(playerStatus);
-            // Playback controls remain inside YouTube's official embedded player.
+            // One explicit user gesture is needed because browser autoplay policies
+            // can block API playback after a result selection.
           } else {
             const results = make('div', 'hud-youtube-results', ''); results.setAttribute('aria-live', 'polite');
             const videos = youtubeState.section === 'shorts' ? [] : youtubeState.section === 'history' ? youtubeState.history : youtubeState.section === 'favorites' ? youtubeState.favorites : youtubeState.videos;

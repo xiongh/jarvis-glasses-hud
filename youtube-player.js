@@ -50,6 +50,19 @@
     let loadGeneration = 0;
     const loadApi = apiLoader || (() => loadIframeApi({ document, window }));
     const notify = (state, detail = '') => onStateChange({ state, detail, videoId, url: videoId ? canonicalWatchUrl(videoId) : '' });
+    const configureIframe = () => {
+      // YT.Player replaces its mount element with the iframe, so look up the
+      // element again rather than relying only on the now-detached mount node.
+      const replacement = container?.id ? document?.getElementById?.(container.id) : null;
+      const iframe = replacement?.tagName === 'IFRAME' ? replacement : replacement?.querySelector?.('iframe') || container?.querySelector?.('iframe');
+      if (!iframe) return;
+      // The IFrame API creates this element. Do not sandbox it: YouTube needs
+      // its own origin to render media and process its official controls.
+      iframe.setAttribute('allow', 'autoplay; encrypted-media; fullscreen; picture-in-picture');
+      iframe.setAttribute('allowfullscreen', '');
+      iframe.allowFullscreen = true;
+      iframe.title = 'YouTube video player';
+    };
 
     async function load(input) {
       const parsed = typeof input === 'string' ? parseVideoInput(input) : input;
@@ -66,19 +79,37 @@
         if (container) container.replaceChildren?.();
         player = new YT.Player(container, {
           videoId,
-          playerVars: { autoplay: 0, playsinline: 1, rel: 0 },
+          playerVars: { autoplay: 0, controls: 1, playsinline: 1, rel: 0, enablejsapi: 1 },
           events: {
-            onReady: (event) => { if (!closed && event?.target === player) notify('ready', 'Player ready.'); },
-            onError: () => { if (!closed) notify('error', 'YouTube could not embed this video. Try another video.'); },
+            onReady: (event) => {
+              if (closed || event?.target !== player) return;
+              configureIframe();
+              notify('ready', 'Video ready. Select Play to start.');
+            },
+            onError: (event) => {
+              if (closed) return;
+              const code = Number(event?.data);
+              const detail = code === 101 || code === 150
+                ? 'This video does not allow embedded playback.'
+                : code === 2 ? 'YouTube rejected this video ID.'
+                  : code === 5 ? 'This browser cannot play this YouTube video.'
+                    : 'YouTube could not embed this video. Try another video.';
+              notify('error', detail);
+            },
+            onAutoplayBlocked: () => { if (!closed) notify('autoplay-blocked', 'Playback needs a direct Play selection.'); },
             onStateChange: (event) => {
               if (closed || event?.target !== player) return;
               const states = YT.PlayerState || {};
               if (event.data === states.PLAYING) notify('playing', 'Playing.');
               else if (event.data === states.PAUSED) notify('paused', 'Paused.');
               else if (event.data === states.ENDED) notify('ended', 'Playback ended.');
+              else if (event.data === states.BUFFERING) notify('buffering', 'Buffering video…');
+              else if (event.data === states.CUED) notify('cued', 'Video cued. Select Play to start.');
             },
           },
         });
+        // Player construction inserts the iframe asynchronously in some WebViews.
+        window?.setTimeout?.(configureIframe, 0);
         return true;
       } catch {
         if (!closed) notify('error', 'The YouTube player could not load. Check your connection and try again.');
@@ -86,7 +117,11 @@
       }
     }
 
-    function play() { if (!player || closed) return false; player.playVideo?.(); return true; }
+    function play() {
+      if (!player || closed) return false;
+      try { player.playVideo?.(); notify('starting', 'Starting video…'); return true; }
+      catch { notify('error', 'This browser blocked playback. Select Play again or open YouTube.'); return false; }
+    }
     function pause() { if (!player || closed) return false; player.pauseVideo?.(); return true; }
     function position() { const value = Number(player?.getCurrentTime?.()); return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
     function duration() { const value = Number(player?.getDuration?.()); return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0; }
