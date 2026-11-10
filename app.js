@@ -38,6 +38,50 @@
     };
   }
 
+  // Keeps feed policy separate from the display/player layer so the physical
+  // input mapping and paging behavior can be exercised without YouTube embeds.
+  function createShortsFeed({ fetchPage, now = Date.now, cooldownMs = 420, prefetchThreshold = 3 } = {}) {
+    let queue = []; let index = -1; let pageToken = ''; let exhausted = false; let source = ''; let active = false; let pending = null; let lastMoveAt = -Infinity;
+    const valid = (item) => item && /^[A-Za-z0-9_-]{11}$/.test(item.videoId);
+    const snapshot = () => ({ active, source, index, queue: queue.slice(), pageToken, exhausted, current: queue[index] || null });
+    const loadPage = async () => {
+      if (pending || exhausted) return pending || snapshot();
+      pending = Promise.resolve(fetchPage?.(source, pageToken)).then((data) => {
+        const known = new Set(queue.map((item) => item.videoId));
+        for (const item of (Array.isArray(data?.videos) ? data.videos : [])) if (valid(item) && !known.has(item.videoId)) { known.add(item.videoId); queue.push({ ...item, kind: 'short', source }); }
+        pageToken = typeof data?.nextPageToken === 'string' ? data.nextPageToken : '';
+        exhausted = !pageToken;
+        return snapshot();
+      }).finally(() => { pending = null; });
+      return pending;
+    };
+    const prefetch = () => active && !exhausted && !pending && queue.length - index - 1 <= prefetchThreshold ? loadPage() : Promise.resolve(snapshot());
+    const start = async (query) => { source = String(query || '').trim(); queue = []; index = -1; pageToken = ''; exhausted = false; active = true; lastMoveAt = -Infinity; await loadPage(); if (queue.length) index = 0; void prefetch(); return snapshot(); };
+    const move = async (delta, { bypassCooldown = false } = {}) => {
+      if (!active) return { ...snapshot(), moved: false, reason: 'inactive' };
+      const direction = Number(delta) > 0 ? 1 : Number(delta) < 0 ? -1 : 0;
+      if (!direction) return { ...snapshot(), moved: false, reason: 'invalid' };
+      const time = now(); if (!bypassCooldown && time - lastMoveAt < cooldownMs) return { ...snapshot(), moved: false, reason: 'cooldown' };
+      if (direction < 0) { if (index <= 0) return { ...snapshot(), moved: false, reason: 'start' }; index -= 1; lastMoveAt = time; return { ...snapshot(), moved: true, reason: 'previous' }; }
+      if (index + 1 >= queue.length && !exhausted) await loadPage();
+      if (index + 1 >= queue.length) return { ...snapshot(), moved: false, reason: exhausted ? 'end' : 'loading' };
+      index += 1; lastMoveAt = time; void prefetch(); return { ...snapshot(), moved: true, reason: 'next' };
+    };
+    return { start, move, prefetch, stop: () => { active = false; }, snapshot, get active() { return active; } };
+  }
+
+  function createShortsInputAdapter({ onNext = () => {}, onPrevious = () => {}, keys = {}, now = Date.now, cooldownMs = 420 } = {}) {
+    const nextKeys = new Set(keys.next || ['ArrowUp']); const previousKeys = new Set(keys.previous || ['ArrowDown']); let lastAt = -Infinity;
+    return { handle(event) {
+      if (event?.target?.matches?.('input, textarea, [contenteditable="true"]')) return false;
+      const direction = nextKeys.has(event?.key) ? 1 : previousKeys.has(event?.key) ? -1 : 0;
+      if (!direction) return false;
+      const time = now(); event.preventDefault?.();
+      if (time - lastAt < cooldownMs) return true;
+      lastAt = time; if (direction > 0) onNext(); else onPrevious(); return true;
+    } };
+  }
+
   function createYouTubeClient({ fetchImpl = globalThis.fetch, backendOrigin = DEFAULT_YOUTUBE_WORKER_ORIGIN, now = Date.now, storage: storageOverride } = {}) {
     let base = normalizeBackendOrigin(backendOrigin) || DEFAULT_YOUTUBE_WORKER_ORIGIN;
     let deviceCredential = '';
@@ -467,7 +511,7 @@
       googleConnectorState.busy = true;
       googleConnectorState.restoring = true;
     }
-    const youtubeState = { section: 'subscriptions', status: 'Checking saved YouTube connection…', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null, sessionReady: false, sessionVerified: false, needsReauth: false, loadSucceeded: false, initialLoadPending: false, errorCode: '' };
+    const youtubeState = { section: 'subscriptions', status: 'Checking saved YouTube connection…', query: '', pageToken: '', videos: [], channels: [], subscriptions: [], history: [], favorites: [], current: null, resumeAt: 0, playerStatus: 'Player is not open.', pairing: null, sessionReady: false, sessionVerified: false, needsReauth: false, loadSucceeded: false, initialLoadPending: false, errorCode: '', shortsFeed: false };
     const youtubeRequestGate = createRequestGate();
     let youtubePlayer = null;
     let youtubeProgressTimer = null;
@@ -479,12 +523,12 @@
       if (!youtubePlayer?.active || !youtubeState.current || !youtubeRecordedStart) return;
       await youtube.record({ ...youtubeState.current, positionSeconds: youtubePlayer.position(), watchSeconds: youtubePlayer.position(), durationSeconds: youtubePlayer.duration(), incrementView: false, kind: youtubeState.current.kind === 'short' || youtubeState.section === 'shorts' ? 'short' : 'video' }).catch(() => {});
     };
-    const leaveYoutubePlayer = () => { clearYoutubeProgress(); void saveYoutubeProgress(); youtubePlayer?.close(); youtubePlayer = null; youtubeState.current = null; youtubeRecordedStart = false; };
-    const openYoutubeVideo = (video) => {
+    const leaveYoutubePlayer = () => { clearYoutubeProgress(); void saveYoutubeProgress(); youtubePlayer?.close(); youtubePlayer = null; youtubeState.current = null; youtubeState.shortsFeed = false; youtubeRecordedStart = false; };
+    const openYoutubeVideo = (video, { feed = false } = {}) => {
       if (!video?.videoId || !/^[A-Za-z0-9_-]{11}$/.test(video.videoId)) return;
       clearYoutubeProgress(); void saveYoutubeProgress(); youtubePlayer?.close(); youtubePlayer = null;
-      youtubeState.current = { ...video, kind: youtubeState.section === 'shorts' ? 'short' : video.kind };
-      youtubeState.resumeAt = Math.max(0, Number(video.positionSeconds) || 0); youtubeState.playerStatus = 'Loading the official embedded player…'; youtubeRecordedStart = false;
+      youtubeState.current = { ...video, kind: feed || youtubeState.section === 'shorts' ? 'short' : video.kind };
+      youtubeState.shortsFeed = feed; youtubeState.resumeAt = Math.max(0, Number(video.positionSeconds) || 0); youtubeState.playerStatus = 'Loading the official embedded player…'; youtubeRecordedStart = false;
       render(hud.snapshot());
       const shell = outlet.querySelector('#hud-youtube-player');
       const api = globalThis.jarvisYouTube;
@@ -495,6 +539,10 @@
         if (event.state === 'ready') {
           if (youtubeState.resumeAt > 0) youtubePlayer?.seek(youtubeState.resumeAt);
           const play = outlet.querySelector('#hud-youtube-play'); if (play) play.disabled = false;
+          if (youtubeState.shortsFeed) {
+            youtubePlayer?.play();
+            globalThis.setTimeout?.(() => { if (youtubeState.shortsFeed && !youtubeRecordedStart) { const fallback = outlet.querySelector('#hud-youtube-play'); if (fallback) { fallback.hidden = false; fallback.textContent = 'TAP TO PLAY'; } } }, 2_000);
+          }
         }
         if (event.state === 'playing') {
           if (!youtubeRecordedStart) { youtubeRecordedStart = true; void youtube.record({ ...youtubeState.current, positionSeconds: youtubePlayer?.position() || 0, watchSeconds: youtubePlayer?.position() || 0, durationSeconds: youtubePlayer?.duration() || 0, incrementView: true, kind: youtubeState.current?.kind === 'short' || youtubeState.section === 'shorts' ? 'short' : 'video' }).catch(() => {}); }
@@ -503,8 +551,33 @@
       } });
       void youtubePlayer.load(video.videoId);
     };
+    const shortsFeed = createShortsFeed({ fetchPage: async (source, pageToken) => youtube.search(`${source} #shorts`, pageToken) });
+    const showShortsFeedItem = (item) => {
+      if (!item) return;
+      youtubeState.section = 'shorts'; youtubeState.status = `Short ${shortsFeed.snapshot().index + 1} of ${shortsFeed.snapshot().queue.length}. Public #shorts search; not personalized.`;
+      openYoutubeVideo(item, { feed: true });
+    };
+    const moveShortsFeed = async (direction) => {
+      const result = await shortsFeed.move(direction);
+      if (result.moved) { showShortsFeedItem(result.current); return; }
+      if (result.reason === 'start') youtubeState.playerStatus = 'This is the first Short.';
+      else if (result.reason === 'end') youtubeState.playerStatus = 'No more public embeddable Shorts were returned.';
+      else if (result.reason === 'loading') youtubeState.playerStatus = 'Loading more Shorts…';
+      const status = outlet.querySelector('#hud-youtube-player-status'); if (status) status.textContent = youtubeState.playerStatus;
+    };
+    const shortsInput = createShortsInputAdapter({ onNext: () => { void moveShortsFeed(1); }, onPrevious: () => { void moveShortsFeed(-1); } });
+    const startShortsFeed = async (query) => {
+      if (!youtube.paired() || !youtubeState.sessionVerified) { youtubeState.status = 'Verify this JARVIS device session before loading Shorts.'; render(hud.snapshot()); return; }
+      youtubeState.query = String(query || '').trim(); youtubeState.status = 'Loading public embeddable Shorts…'; render(hud.snapshot());
+      try {
+        const feed = await shortsFeed.start(youtubeState.query);
+        if (!feed.current) { youtubeState.status = 'No embeddable Shorts were returned. Try another topic.'; youtubeState.loadSucceeded = true; render(hud.snapshot()); return; }
+        showShortsFeedItem(feed.current);
+      } catch (error) { shortsFeed.stop(); youtubeState.status = error?.message || 'Could not load Shorts. Try again.'; youtubeState.errorCode = error?.code || ''; render(hud.snapshot()); }
+    };
     const showShortsMenu = () => {
       if (!youtube.paired() || !youtubeState.sessionVerified) { youtubeRequestGate.cancel(); youtubeState.status = youtubeState.sessionReady ? 'Verify this JARVIS device session before loading YouTube.' : 'Checking the saved JARVIS device session…'; render(hud.snapshot()); return; }
+      shortsFeed.stop();
       if (youtubeState.current) leaveYoutubePlayer();
       youtubeRequestGate.cancel();
       youtubeState.section = 'shorts'; youtubeState.videos = []; youtubeState.channels = []; youtubeState.subscriptions = []; youtubeState.history = []; youtubeState.pageToken = ''; youtubeState.loadSucceeded = false; youtubeState.errorCode = '';
@@ -513,6 +586,7 @@
     };
     const loadYoutubeSection = async (section = youtubeState.section, append = false) => {
       if (!youtube.paired() || !youtubeState.sessionVerified) { youtubeRequestGate.cancel(); youtubeState.status = youtubeState.sessionReady ? 'Verify this JARVIS device session before loading YouTube.' : 'Checking the saved JARVIS device session…'; render(hud.snapshot()); return; }
+      if (section !== 'shorts') shortsFeed.stop();
       if (youtubeState.current) leaveYoutubePlayer();
       const queryKey = section === 'home' ? '' : youtubeState.query.trim();
       const requestKey = `${section}|${queryKey}|${append ? youtubeState.pageToken : ''}`;
@@ -661,7 +735,7 @@
         searchForm.addEventListener('submit', (event) => {
           event.preventDefault(); youtubeState.query = query.value.trim();
           if (!youtubeState.query || youtubeState.query.length > 100) { youtubeState.status = 'Enter a search of 1 to 100 characters.'; status.textContent = youtubeState.status; return; }
-          void loadYoutubeSection(youtubeState.section === 'shorts' ? 'shorts' : 'search');
+          if (youtubeState.section === 'shorts') void startShortsFeed(youtubeState.query); else void loadYoutubeSection('search');
         });
         searchForm.append(query, submit);
         const nav = make('nav', 'hud-youtube-nav', ''); nav.setAttribute('aria-label', 'YouTube sections');
@@ -725,7 +799,7 @@
             // the 200×200 minimum viewport and clipping rules survive insertion.
             const shell = make('div', `hud-youtube-player-shell${youtubeState.current.kind === 'short' ? ' is-short' : ''}`, '');
             const mount = make('div', '', ''); mount.id = 'hud-youtube-player'; mount.setAttribute('aria-label', 'YouTube embedded video player'); shell.append(mount); outlet.append(shell);
-            const play = make('button', 'action hud-youtube-play', 'PLAY'); play.id = 'hud-youtube-play'; play.type = 'button'; play.disabled = true; play.dataset.youtubeFocus = 'true'; play.addEventListener('click', () => {
+            const play = make('button', 'action hud-youtube-play', youtubeState.shortsFeed ? 'TAP TO PLAY' : 'PLAY'); play.id = 'hud-youtube-play'; play.type = 'button'; play.disabled = true; play.hidden = youtubeState.shortsFeed; play.dataset.youtubeFocus = 'true'; play.addEventListener('click', () => {
               if (!youtubePlayer?.play()) { youtubeState.playerStatus = 'Player is still loading. Select Play when it is ready.'; const status = outlet.querySelector('#hud-youtube-player-status'); if (status) status.textContent = youtubeState.playerStatus; }
             }); outlet.append(play);
             const playerStatus = make('p', 'status hud-youtube-player-status', youtubeState.playerStatus); playerStatus.id = 'hud-youtube-player-status'; outlet.append(playerStatus);
@@ -734,8 +808,8 @@
           } else {
             if (youtubeState.section === 'shorts') {
               const shortsActions = make('section', 'hud-youtube-shorts-actions', ''); shortsActions.setAttribute('aria-label', 'Shorts options');
-              const popular = make('button', 'action hud-youtube-shorts-action', 'POPULAR SHORTS'); popular.type = 'button'; popular.dataset.youtubeFocus = 'true'; popular.addEventListener('click', () => { youtubeState.query = 'popular'; void loadYoutubeSection('shorts'); });
-              const topic = make('button', 'action hud-youtube-shorts-action', 'SEARCH TOPIC SHORTS'); topic.type = 'button'; topic.dataset.youtubeFocus = 'true'; topic.addEventListener('click', () => { youtubeState.query = query.value.trim(); if (!youtubeState.query) { youtubeState.status = 'Enter a topic in the search box, then choose SEARCH TOPIC SHORTS.'; status.textContent = youtubeState.status; query.focus(); return; } void loadYoutubeSection('shorts'); });
+              const popular = make('button', 'action hud-youtube-shorts-action', 'POPULAR SHORTS'); popular.type = 'button'; popular.dataset.youtubeFocus = 'true'; popular.addEventListener('click', () => { void startShortsFeed('popular'); });
+              const topic = make('button', 'action hud-youtube-shorts-action', 'SEARCH TOPIC SHORTS'); topic.type = 'button'; topic.dataset.youtubeFocus = 'true'; topic.addEventListener('click', () => { youtubeState.query = query.value.trim(); if (!youtubeState.query) { youtubeState.status = 'Enter a topic in the search box, then choose SEARCH TOPIC SHORTS.'; status.textContent = youtubeState.status; query.focus(); return; } void startShortsFeed(youtubeState.query); });
               shortsActions.append(popular, topic, make('p', 'copy hud-youtube-help', 'Popular Shorts searches public videos for “popular #shorts.” Search Topic Shorts uses the topic above. YouTube does not provide this HUD a personalized Most Watched or trending Shorts feed.'));
               outlet.append(shortsActions);
             }
@@ -760,7 +834,7 @@
             if (youtubeState.pageToken && ['search', 'subscriptions'].includes(youtubeState.section)) { const more = make('button', 'action', youtubeState.section === 'subscriptions' ? 'LOAD MORE CHANNELS' : 'LOAD MORE VIDEOS'); more.type = 'button'; more.dataset.youtubeFocus = 'true'; more.addEventListener('click', () => void loadYoutubeSection(youtubeState.section, true)); outlet.append(more); }
           }
         }
-        const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.dataset.youtubeFocus = 'true'; backButton.addEventListener('click', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); }); outlet.append(backButton);
+        const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.dataset.youtubeFocus = 'true'; backButton.addEventListener('click', () => { if (shortsFeed.active) shortsFeed.stop(); if (youtubeState.current) leaveYoutubePlayer(); hud.back(); }); outlet.append(backButton);
         return;
       }
       const item = state.item;
@@ -785,7 +859,8 @@
       if (handleUpdateControlsKey(event, document)) return;
       if (handleConnectAppsKey(event, { hud, outlet, document })) return;
       if (hud.snapshot().screen === 'youtube') {
-        if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); if (youtubeState.current) { leaveYoutubePlayer(); render(hud.snapshot()); } else hud.back(); return; }
+        if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); if (youtubeState.current) { if (shortsFeed.active) shortsFeed.stop(); leaveYoutubePlayer(); render(hud.snapshot()); } else hud.back(); return; }
+        if (shortsFeed.active && youtubeState.current?.kind === 'short' && shortsInput.handle(event)) return;
         if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName)) return;
         if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
           event.preventDefault();
@@ -817,5 +892,5 @@
     }
     boot(document);
   }, { once: true });
-  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, bindConnectAppsAction, boot };
+  return { MENU, createHud, createRequestGate, createShortsFeed, createShortsInputAdapter, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, bindConnectAppsAction, boot };
 }));

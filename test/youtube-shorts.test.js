@@ -12,9 +12,9 @@ test('Shorts presents only supported public-search options and every option is k
   assert.match(app, /'SEARCH TOPIC SHORTS'/);
   assert.match(app, /popular\.dataset\.youtubeFocus = 'true'/);
   assert.match(app, /topic\.dataset\.youtubeFocus = 'true'/);
-  assert.match(app, /popular\.addEventListener\('click', \(\) => \{ youtubeState\.query = 'popular'; void loadYoutubeSection\('shorts'\); \}\)/);
+  assert.match(app, /popular\.addEventListener\('click', \(\) => \{ void startShortsFeed\('popular'\); \}\)/);
   assert.match(app, /topic\.addEventListener\('click', \(\) => \{ youtubeState\.query = query\.value\.trim\(\)/);
-  assert.match(app, /youtubeState\.section === 'shorts' \? 'shorts' : 'search'/);
+  assert.match(app, /if \(youtubeState\.section === 'shorts'\) void startShortsFeed\(youtubeState\.query\); else void loadYoutubeSection\('search'\)/);
   assert.match(app, /if \(section === 'shorts'\) showShortsMenu\(\)/);
   assert.match(app, /\[data-youtube-focus\]:not\(:disabled\)/);
   assert.doesNotMatch(app, /make\('button'[^\n]*(?:TOP IN USE|MOST WATCHED)/i);
