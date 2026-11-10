@@ -51,6 +51,8 @@
 .hud-youtube-player-shell.is-short { width: min(100%, 200px); min-width: 200px; aspect-ratio: 9 / 16; }
 .hud-youtube-player-shell iframe { min-width: 200px; min-height: 200px; }
 .hud-youtube-play { align-self: center; width: min(100%, 200px); min-height: 38px; }
+.hud-youtube-shorts-actions { display: grid; gap: 6px; width: min(100%, 300px); align-self: center; }
+.hud-youtube-shorts-action { min-height: 36px; font-size: 10px; }
 .hud-youtube-video-title { font-size: 15px; }
 @media (max-width: 700px), (max-height: 700px) {
   .hud { min-height: 100vh; padding: 12px 14px 8px; }

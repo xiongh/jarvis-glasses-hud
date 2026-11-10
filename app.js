@@ -503,6 +503,14 @@
       } });
       void youtubePlayer.load(video.videoId);
     };
+    const showShortsMenu = () => {
+      if (!youtube.paired() || !youtubeState.sessionVerified) { youtubeRequestGate.cancel(); youtubeState.status = youtubeState.sessionReady ? 'Verify this JARVIS device session before loading YouTube.' : 'Checking the saved JARVIS device session…'; render(hud.snapshot()); return; }
+      if (youtubeState.current) leaveYoutubePlayer();
+      youtubeRequestGate.cancel();
+      youtubeState.section = 'shorts'; youtubeState.videos = []; youtubeState.channels = []; youtubeState.subscriptions = []; youtubeState.history = []; youtubeState.pageToken = ''; youtubeState.loadSucceeded = false; youtubeState.errorCode = '';
+      youtubeState.status = 'Choose POPULAR SHORTS, or enter a topic and choose SEARCH TOPIC SHORTS. These are public #shorts searches, not a personalized or ranked feed.';
+      render(hud.snapshot());
+    };
     const loadYoutubeSection = async (section = youtubeState.section, append = false) => {
       if (!youtube.paired() || !youtubeState.sessionVerified) { youtubeRequestGate.cancel(); youtubeState.status = youtubeState.sessionReady ? 'Verify this JARVIS device session before loading YouTube.' : 'Checking the saved JARVIS device session…'; render(hud.snapshot()); return; }
       if (youtubeState.current) leaveYoutubePlayer();
@@ -510,12 +518,13 @@
       const requestKey = `${section}|${queryKey}|${append ? youtubeState.pageToken : ''}`;
       const loadRequest = youtubeRequestGate.begin(requestKey);
       if (!loadRequest) return;
-      youtubeState.section = section; youtubeState.status = section === 'shorts' ? 'Searching embeddable videos matching #shorts. This is not an official Shorts feed.' : 'Loading YouTube…';
+      youtubeState.section = section; youtubeState.status = section === 'shorts' ? 'Searching public embeddable videos matching #shorts…' : 'Loading YouTube…';
       if (!append) { youtubeState.videos = []; youtubeState.channels = []; youtubeState.subscriptions = []; youtubeState.history = []; youtubeState.pageToken = ''; youtubeState.loadSucceeded = false; youtubeState.errorCode = ''; }
       render(hud.snapshot());
       try {
         if (section === 'home' || section === 'search' || section === 'shorts') {
-          const query = section === 'home' ? '' : (youtubeState.query.trim() || (section === 'shorts' ? 'popular' : ''));
+          const query = section === 'home' ? '' : youtubeState.query.trim();
+          if (section === 'shorts' && !query) throw new Error('Choose POPULAR SHORTS, or enter a topic and choose SEARCH TOPIC SHORTS.');
           if (section !== 'home' && !query) throw new Error('Enter a search query.');
           if (section === 'search' || section === 'shorts') await youtube.recordSearch(query).catch(() => {});
           const searchQuery = section === 'shorts' ? `${query} #shorts` : query;
@@ -526,9 +535,9 @@
           youtubeState.channels = append ? youtubeState.channels : (Array.isArray(data.channels) ? data.channels : []);
           youtubeState.pageToken = typeof data.nextPageToken === 'string' ? data.nextPageToken : '';
           youtubeState.loadSucceeded = true;
-          youtubeState.status = section === 'home' ? (data.message || 'Recent authorized YouTube account activity; not official watch history or YouTube recommendations.') : section === 'shorts' ? 'Showing one embeddable result matching #shorts. This is not a complete official Shorts feed.' : `Search results for “${query}”.`;
+          youtubeState.status = section === 'home' ? (data.message || 'Recent authorized YouTube account activity; not official watch history or YouTube recommendations.') : section === 'shorts' ? 'Opening one public embeddable result matching #shorts. This is not a personalized, most-watched, or trending feed.' : `Search results for “${query}”.`;
           if (section === 'shorts' && !append && newVideos.length) {
-            youtubeState.status = 'Opening one embeddable #shorts search result. This is not a complete official Shorts feed.';
+            youtubeState.status = 'Opening one public embeddable #shorts result.';
             loadRequest.finish();
             openYoutubeVideo(newVideos[0]);
             return;
@@ -652,7 +661,7 @@
         searchForm.addEventListener('submit', (event) => {
           event.preventDefault(); youtubeState.query = query.value.trim();
           if (!youtubeState.query || youtubeState.query.length > 100) { youtubeState.status = 'Enter a search of 1 to 100 characters.'; status.textContent = youtubeState.status; return; }
-          void loadYoutubeSection('search');
+          void loadYoutubeSection(youtubeState.section === 'shorts' ? 'shorts' : 'search');
         });
         searchForm.append(query, submit);
         const nav = make('nav', 'hud-youtube-nav', ''); nav.setAttribute('aria-label', 'YouTube sections');
@@ -661,7 +670,7 @@
           button.type = 'button'; button.dataset.youtubeFocus = 'true'; button.disabled = !connected;
           const activeSection = ['search', 'account', 'history', 'favorites'].includes(youtubeState.section) ? 'subscriptions' : youtubeState.section;
           button.setAttribute('aria-pressed', String(activeSection === section));
-          button.addEventListener('click', () => { youtubeState.query = ''; youtubeState.selectedChannel = null; void loadYoutubeSection(section); });
+          button.addEventListener('click', () => { youtubeState.selectedChannel = null; if (section === 'shorts') showShortsMenu(); else { youtubeState.query = ''; void loadYoutubeSection(section); } });
           nav.append(button);
         }
         outlet.append(youtubeHeader, status, searchForm, nav);
@@ -723,6 +732,13 @@
             // One explicit user gesture is needed because browser autoplay policies
             // can block API playback after a result selection.
           } else {
+            if (youtubeState.section === 'shorts') {
+              const shortsActions = make('section', 'hud-youtube-shorts-actions', ''); shortsActions.setAttribute('aria-label', 'Shorts options');
+              const popular = make('button', 'action hud-youtube-shorts-action', 'POPULAR SHORTS'); popular.type = 'button'; popular.dataset.youtubeFocus = 'true'; popular.addEventListener('click', () => { youtubeState.query = 'popular'; void loadYoutubeSection('shorts'); });
+              const topic = make('button', 'action hud-youtube-shorts-action', 'SEARCH TOPIC SHORTS'); topic.type = 'button'; topic.dataset.youtubeFocus = 'true'; topic.addEventListener('click', () => { youtubeState.query = query.value.trim(); if (!youtubeState.query) { youtubeState.status = 'Enter a topic in the search box, then choose SEARCH TOPIC SHORTS.'; status.textContent = youtubeState.status; query.focus(); return; } void loadYoutubeSection('shorts'); });
+              shortsActions.append(popular, topic, make('p', 'copy hud-youtube-help', 'Popular Shorts searches public videos for “popular #shorts.” Search Topic Shorts uses the topic above. YouTube does not provide this HUD a personalized Most Watched or trending Shorts feed.'));
+              outlet.append(shortsActions);
+            }
             const results = make('div', 'hud-youtube-results', ''); results.setAttribute('aria-live', 'polite');
             const videos = youtubeState.section === 'shorts' ? [] : youtubeState.section === 'history' ? youtubeState.history : youtubeState.section === 'favorites' ? youtubeState.favorites : youtubeState.videos;
             videos.forEach((video) => {
