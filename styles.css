@@ -70,7 +70,7 @@ body { margin: 0; min-height: 100vh; background: #000; }
 .session-lock-card h1, .session-lock-card p { margin: 0; }
 .lock-code { color: #8ff; font-size: 30px; font-weight: 800; letter-spacing: .16em; }
 .phone-unlock-link { display: block; min-height: 42px; padding: 12px; border: 1px solid #8ff; border-radius: 6px; color: #dfffff; text-align: center; font-size: 11px; font-weight: 700; text-decoration: none; }
-html[data-jarvis-auth-enabled="true"] #jarvis-glasses-hud { visibility: hidden; }
+html[data-jarvis-auth-enabled="true"] body:not([data-jarvis-session="authenticated"]) #jarvis-glasses-hud { visibility: hidden; }
 .phone-unlock-page { min-height: 100vh; margin: 0; padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom)); box-sizing: border-box; color: #f1f4fa; background: #090b10; font: 1rem/1.5 system-ui, sans-serif; }
 .phone-unlock-card { width: min(100%, 36rem); margin: 8vh auto; padding: clamp(1rem, 5vw, 2rem); box-sizing: border-box; border: 1px solid #46515f; border-radius: 1rem; background: #11151d; }
 .phone-unlock-card h1 { line-height: 1.15; }

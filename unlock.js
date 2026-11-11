@@ -80,10 +80,10 @@
   function mountGlasses(documentObject, { windowObject = globalThis.window, navigatorObject = globalThis.navigator, fetchImpl = globalThis.fetch, now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
     const lock = documentObject?.getElementById?.('jarvis-session-lock'); const app = documentObject?.getElementById?.('jarvis-glasses-hud');
     if (!lock || !app) return null;
-    const status = documentObject.getElementById('lock-status'); const code = documentObject.getElementById('lock-code'); const retry = documentObject.getElementById('lock-retry'); const faceId = documentObject.getElementById('lock-face-id'); const manualLock = documentObject.getElementById('hud-lock'); const diagnostics = documentObject.getElementById('hud-auth-diagnostics');
+    const title = documentObject.getElementById('lock-title'); const status = documentObject.getElementById('lock-status'); const code = documentObject.getElementById('lock-code'); const retry = documentObject.getElementById('lock-retry'); const faceId = documentObject.getElementById('lock-face-id'); const manualLock = documentObject.getElementById('hud-lock'); const diagnostics = documentObject.getElementById('hud-auth-diagnostics');
     const worker = trustedWorker(windowObject.JARVIS_AUTH_CONFIG, windowObject.location);
     const POLL_INTERVAL_MS = 6_000; const POLL_BACKOFF_MIN_MS = 10_000; const POLL_BACKOFF_MAX_MS = 30_000;
-    let timer = null; let expiryTimer = null; let expiry = 0; let generation = 0; let busy = false; let unlocked = false; let pollInFlight = false; let pollDelay = POLL_INTERVAL_MS;
+    let timer = null; let expiryTimer = null; let expiry = 0; let generation = 0; let busy = false; let unlocked = false; let pollInFlight = false; let pollDelay = POLL_INTERVAL_MS; let restoreInFlight = null;
     const say = (message) => { status.textContent = message; };
     // Staging-only, intentionally non-secret observability.  It records
     // outcomes, never headers, cookies, assertions, tokens, or credentials.
@@ -96,8 +96,9 @@
       diagnostics.textContent = `STAGING AUTH DIAGNOSTICS · BUILD ${diagnosticState.build} · UNLOCK ${diagnosticState.unlock} · COOKIE ${diagnosticState.cookie} · RESTORE ${diagnosticState.restore} · LOCK ${diagnosticState.lock} · LOGOUT ${diagnosticState.logout}`;
     };
     const diagnose = (changes) => { Object.assign(diagnosticState, changes); report(); };
-    const setLocked = (message) => { const wasUnlocked = unlocked; unlocked = false; expiry = 0; if (expiryTimer !== null) clearTimer(expiryTimer); expiryTimer = null; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'locked'; code.hidden = true; if (message) say(message); if (wasUnlocked) documentObject.dispatchEvent(new windowObject.Event('jarvis-session-locked')); };
-    const unlock = (expiresAt) => { if (expiryTimer !== null) clearTimer(expiryTimer); unlocked = true; expiry = expiresAt * 1000; lock.hidden = true; app.inert = false; documentObject.body.dataset.jarvisSession = 'unlocked'; documentObject.dispatchEvent(new windowObject.Event('jarvis-session-unlocked')); expiryTimer = setTimer(() => { if (unlocked) setLocked('Your JARVIS session expired. Approve again on your iPhone.'); }, Math.max(0, expiry - now())); };
+    const setChecking = (message = 'Checking your secure JARVIS session…') => { unlocked = false; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'checking_session'; code.hidden = true; if (title) title.textContent = 'CHECKING SESSION'; say(message); };
+    const setLocked = (message) => { const wasUnlocked = unlocked; unlocked = false; expiry = 0; if (expiryTimer !== null) clearTimer(expiryTimer); expiryTimer = null; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'locked'; code.hidden = true; if (title) title.textContent = 'LOCKED'; if (message) say(message); if (wasUnlocked) documentObject.dispatchEvent(new windowObject.Event('jarvis-session-locked')); };
+    const unlock = (expiresAt) => { if (expiryTimer !== null) clearTimer(expiryTimer); unlocked = true; expiry = expiresAt * 1000; lock.hidden = true; app.inert = false; documentObject.body.dataset.jarvisSession = 'authenticated'; documentObject.dispatchEvent(new windowObject.Event('jarvis-session-unlocked')); expiryTimer = setTimer(() => { if (unlocked) setLocked('Your JARVIS session expired. Approve again on your iPhone.'); }, Math.max(0, expiry - now())); };
     const stop = () => { generation++; if (timer !== null) clearTimer(timer); timer = null; busy = false; pollDelay = POLL_INTERVAL_MS; };
     const schedulePoll = (id, secret, run, delay = POLL_INTERVAL_MS) => {
       if (run !== generation || unlocked) return;
@@ -113,7 +114,7 @@
         const result = await request(fetchImpl, worker, '/v1/glasses/unlock/poll', { transactionId: id, pollSecret: secret }, { credentials: 'include' });
         if (run !== generation) return;
         if (result.unlocked === true && Number.isSafeInteger(result.expiresAt)) {
-          diagnose({ cookie: result.session === 'issued' ? 'issued' : 'response-missing-marker' });
+          diagnose({ cookie: result.session === 'issued' ? 'issued' : 'response-missing-marker', restore: 'not-needed' });
           stop();
           unlock(result.expiresAt);
           if (typeof result.assertion === 'string' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(result.assertion) && Number.isSafeInteger(result.assertionExpiresAt)) {
@@ -149,8 +150,10 @@
       } catch (error) { if (run === generation) { busy = false; retry.disabled = false; say(error?.message || 'Could not start a phone approval request.'); } return false; }
     };
     const restore = async () => {
-      setLocked('Restoring your secure JARVIS session…');
-      if (!worker || navigatorObject.onLine === false) return false;
+      if (restoreInFlight) return restoreInFlight;
+      setChecking();
+      restoreInFlight = (async () => {
+      if (!worker || navigatorObject.onLine === false) { diagnose({ restore: navigatorObject.onLine === false ? 'network-unavailable' : 'not-configured' }); setLocked('Session check could not run. Unlock again with your iPhone.'); return false; }
       try {
         diagnose({ restore: 'requested' });
         const result = await request(fetchImpl, worker, '/v1/hud/session/restore', {}, { credentials: 'include', headers: { 'X-Jarvis-HUD': 'restore' } });
@@ -160,6 +163,8 @@
         windowObject.dispatchEvent?.(new CustomEvent('jarvis-glasses-assertion', { detail: { assertion: result.assertion, expiresAt: result.assertionExpiresAt * 1000 } }));
         return true;
       } catch { diagnose({ restore: 'rejected' }); setLocked('Your JARVIS session is locked. Unlock again with your iPhone.'); return false; }
+      })().finally(() => { restoreInFlight = null; });
+      return restoreInFlight;
     };
     const lockNow = async () => {
       if (manualLock?.disabled) return false;
@@ -194,7 +199,7 @@
         diagnose({ unlock: 'direct-face-id', cookie: 'issuance-requested' });
         const result = await request(fetchImpl, worker, '/v1/hud/unlock/verify', { transactionId: pending.transactionId, challengeId: pending.challengeId, response: serializeAssertion(credential) }, { credentials: 'include' });
         if (result.authorized !== true || result.transactionId !== pending.transactionId) throw new Error('JARVIS did not authorize this HUD unlock transaction.');
-        diagnose({ cookie: result.session === 'issued' ? 'issued' : 'response-missing-marker' });
+        diagnose({ cookie: result.session === 'issued' ? 'issued' : 'response-missing-marker', restore: 'not-needed' });
         stop();
         unlock(Number.isSafeInteger(result.expiresAt) ? result.expiresAt : Math.floor(now() / 1000) + 1800);
         if (typeof result.assertion === 'string' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(result.assertion) && Number.isSafeInteger(result.assertionExpiresAt)) {
@@ -208,8 +213,8 @@
     });
     documentObject.addEventListener('keydown', (event) => { if (!unlocked && !event.target?.closest?.('[data-update-controls]')) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
     documentObject.addEventListener('visibilitychange', () => { if (documentObject.hidden) { stop(); if (!unlocked) setLocked('JARVIS is locked.'); } else if (expiry && expiry <= now()) { stop(); setLocked('Your JARVIS session expired. Approve again on your iPhone.'); void start(); } else if (!unlocked && !busy) void start(); });
-    report(); setLocked('');
-    if (windowObject.JARVIS_AUTH_CONFIG?.sessionRestore === true) void restore().then((restored) => { if (!restored) void start(); });
+    report(); setChecking();
+    if (windowObject.JARVIS_AUTH_CONFIG?.sessionRestore === true) void restore();
     else void start();
     return { start, restore, lock: lockNow, isUnlocked: () => unlocked };
   }
