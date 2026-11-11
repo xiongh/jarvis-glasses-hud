@@ -197,6 +197,9 @@
         diagnose({ cookie: result.session === 'issued' ? 'issued' : 'response-missing-marker' });
         stop();
         unlock(Number.isSafeInteger(result.expiresAt) ? result.expiresAt : Math.floor(now() / 1000) + 1800);
+        if (typeof result.assertion === 'string' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(result.assertion) && Number.isSafeInteger(result.assertionExpiresAt)) {
+          windowObject.dispatchEvent?.(new windowObject.CustomEvent('jarvis-glasses-assertion', { detail: { assertion: result.assertion, expiresAt: result.assertionExpiresAt * 1000 } }));
+        }
         say('Unlocked with Face ID.');
       } catch (error) {
         const canceled = error?.name === 'NotAllowedError';
