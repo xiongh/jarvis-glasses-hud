@@ -27,6 +27,7 @@
         <span id="hud-build-version" data-hud-build-version data-build-id="__JARVIS_BUILD_ID__">BUILD __JARVIS_BUILD_ID__</span>
         <button id="hud-check-updates" type="button" aria-label="Check for JARVIS updates" data-hud-check-updates data-update-focus>CHECK UPDATES</button>
         <button id="hud-reload-update" type="button" aria-label="Reload the latest JARVIS release" data-hud-reload-update data-update-focus hidden>RELOAD LATEST</button>
+        <button id="hud-open-input-diagnostics" type="button" aria-label="Open staging input diagnostics" hidden>INPUT DIAGNOSTICS</button>
         <button id="hud-lock" type="button" aria-label="Lock JARVIS">LOCK</button>
       </div>
       <p id="hud-update-status" data-hud-update-status class="hud-update-status" role="status" aria-live="polite"></p>
@@ -34,6 +35,16 @@
       <section id="hud-screen" class="hud-screen" aria-live="polite"></section>
       <p class="hint">ARROWS: NAVIGATE · ENTER: SELECT · ESC: BACK</p>
     </main>
+    <section id="hud-input-diagnostics" class="hud-input-diagnostics" role="dialog" aria-modal="true" aria-labelledby="hud-input-diagnostics-title" hidden>
+      <div class="hud-input-diagnostics-card">
+        <p class="eyebrow">STAGING ONLY</p>
+        <h1 id="hud-input-diagnostics-title">INPUT DIAGNOSTICS</h1>
+        <p class="copy">Event categories only. No text, account data, or coordinates are collected or saved.</p>
+        <pre id="hud-input-diagnostics-readout" aria-live="polite"></pre>
+        <button id="hud-clear-input-diagnostics" class="action" type="button">CLEAR READOUT</button>
+        <button id="hud-close-input-diagnostics" class="action" type="button">CLOSE DIAGNOSTICS</button>
+      </div>
+    </section>
     <dialog id="jarvis-update-confirm" aria-labelledby="jarvis-update-confirm-title"><h2 id="jarvis-update-confirm-title">JARVIS Update Available</h2><p>Reloading JARVIS will apply the latest version.</p><p>Your active session will be restored automatically if it is still valid. Otherwise, you'll need to unlock again with your iPhone.</p><form method="dialog"><button id="jarvis-update-cancel" value="cancel">CANCEL</button><button id="jarvis-update-confirm-reload" value="reload">RELOAD NOW</button></form></dialog>
     <script src="./youtube-player.js"></script>
     <script src="./connectors-config.js"></script>
@@ -41,5 +52,6 @@
     <script src="./unlock.js"></script>
     <script src="./staging-chat.js"></script>
     <script src="./app.js"></script>
+    <script src="./input-diagnostics.js"></script>
   </body>
 </html>

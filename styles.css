@@ -90,6 +90,12 @@ html[data-jarvis-auth-enabled="true"] body[data-jarvis-session="checking_session
 .release-controls button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; border-color: #8ff; }
 .release-controls button:disabled { opacity: .6; }
 .release-controls [hidden] { display: none; }
+.hud-input-diagnostics { position: fixed; z-index: 1200; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: #000; }
+.hud-input-diagnostics[hidden] { display: none; }
+.hud-input-diagnostics-card { display: grid; gap: 10px; width: min(100%, 500px); max-height: 100%; overflow: auto; padding: 18px; border: 2px solid #8ff; border-radius: 10px; background: #071010; }
+.hud-input-diagnostics-card h1, .hud-input-diagnostics-card p { margin: 0; }
+.hud-input-diagnostics-card .copy { font-size: 13px; }
+.hud-input-diagnostics-card pre { min-height: 106px; margin: 0; padding: 10px; overflow-wrap: anywhere; white-space: pre-wrap; border: 1px solid #466; background: #020605; color: #dfffff; font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .hud-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #8ff; padding-bottom: 14px; letter-spacing: .13em; font-size: 17px; }
 .brand { font-weight: 800; color: #fff; }.online { color: #8f8; font-size: 13px; }
 .hud-screen { display: flex; flex: 1; min-height: 0; flex-direction: column; justify-content: center; gap: 18px; }
