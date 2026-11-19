@@ -1,6 +1,7 @@
 :root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; background: #000; color: #fff; }
 .hud-screen input { width: 100%; min-height: 38px; margin: 4px 0; border: 1px solid #8ff; border-radius: 4px; padding: 8px; color: #fff; background: #050808; font: inherit; font-size: 12px; }
-.chat-log { max-height: 145px; overflow: auto; margin: 7px 0; border: 1px solid #466; background: #020605; }
+.chat-log { max-height: min(42vh, 320px); min-height: 88px; overflow-y: scroll; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; margin: 7px 0; border: 1px solid #466; background: #020605; }
+.chat-log::-webkit-scrollbar { width: 10px; }.chat-log::-webkit-scrollbar-thumb { background: #4b8; border-radius: 8px; }.chat-log::-webkit-scrollbar-track { background: #020605; }
 .chat-message { margin: 0; padding: 7px; border-bottom: 1px solid #244; font-size: 11px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-message.user { color: #baf7d1; }.chat-message.assistant { color: #eafff1; }
 .hud-screen.youtube-mode { justify-content: flex-start; overflow-y: auto; overscroll-behavior: contain; gap: 7px; padding: 5px 0; }
@@ -70,12 +71,13 @@ body { margin: 0; min-height: 100vh; background: #000; }
 .session-lock-card h1, .session-lock-card p { margin: 0; }
 .lock-code { color: #8ff; font-size: 30px; font-weight: 800; letter-spacing: .16em; }
 .phone-unlock-link { display: block; min-height: 42px; padding: 12px; border: 1px solid #8ff; border-radius: 6px; color: #dfffff; text-align: center; font-size: 11px; font-weight: 700; text-decoration: none; }
-html[data-jarvis-auth-enabled="true"] body:not([data-jarvis-session="authenticated"]) #jarvis-glasses-hud { visibility: hidden; }
+html[data-jarvis-auth-enabled="true"] body[data-jarvis-session="checking_session"], html[data-jarvis-auth-enabled="true"] body[data-jarvis-session="locked"] { background: #000; }
+html[data-jarvis-auth-enabled="true"] body[data-jarvis-session="checking_session"] #jarvis-glasses-hud, html[data-jarvis-auth-enabled="true"] body[data-jarvis-session="locked"] #jarvis-glasses-hud { visibility: hidden; }
 /* The static document must never paint LOCKED before the credentialed restore
    request classifies the session.  JavaScript changes this only to LOCKED
    after an explicit rejection, expiry, revocation, or safe network failure. */
-html[data-jarvis-auth-enabled="true"] body:not([data-jarvis-session="locked"]) #lock-title { font-size: 0; }
-html[data-jarvis-auth-enabled="true"] body:not([data-jarvis-session="locked"]) #lock-title::after { content: 'CHECKING SESSION'; font-size: 2em; }
+html[data-jarvis-auth-enabled="true"] body[data-jarvis-session="checking_session"] #lock-title { font-size: 0; }
+html[data-jarvis-auth-enabled="true"] body[data-jarvis-session="checking_session"] #lock-title::after { content: 'CHECKING SESSION'; font-size: 2em; }
 .phone-unlock-page { min-height: 100vh; margin: 0; padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom)); box-sizing: border-box; color: #f1f4fa; background: #090b10; font: 1rem/1.5 system-ui, sans-serif; }
 .phone-unlock-card { width: min(100%, 36rem); margin: 8vh auto; padding: clamp(1rem, 5vw, 2rem); box-sizing: border-box; border: 1px solid #46515f; border-radius: 1rem; background: #11151d; }
 .phone-unlock-card h1 { line-height: 1.15; }
@@ -95,6 +97,7 @@ html[data-jarvis-auth-enabled="true"] body:not([data-jarvis-session="locked"]) #
 .status { border-left: 4px solid #8ff; padding: 12px 14px; background: #071010; color: #d8ffff; font-weight: 700; }
 .menu { display: grid; gap: 10px; }.menu-button, .action { appearance: none; width: 100%; min-height: 62px; padding: 12px 16px; border: 2px solid #7b9292; border-radius: 8px; background: #050808; color: #fff; text-align: left; font: inherit; letter-spacing: .07em; cursor: pointer; }.menu-button strong { display: block; font-size: 18px; }.menu-button small { color: #c5d2d2; font-size: 12px; letter-spacing: .04em; }.menu-button[aria-current="true"], .menu-button:focus-visible, .action:focus-visible { outline: 3px solid #fff; outline-offset: 2px; border-color: #8ff; background: #103030; }.unavailable { border-color: #a08b54; }.unavailable small { color: #ffe6a3; }
 .detail-title { margin: 0; font-size: 30px; letter-spacing: .08em; }.unavailable-label { display: inline-block; width: fit-content; border: 1px solid #ffd166; color: #ffd166; padding: 5px 8px; font-size: 12px; font-weight: 700; letter-spacing: .1em; }.action { text-align: center; border-color: #8ff; font-weight: 700; }
+.hud-app-selection { display: grid; gap: 6px; }.hud-app-choice { display: flex; align-items: center; gap: 9px; min-height: 34px; cursor: pointer; }.hud-app-choice input[type="checkbox"] { appearance: auto; width: 22px; min-width: 22px; min-height: 22px; margin: 0; padding: 0; accent-color: #8ff; cursor: pointer; }
 .hint { margin: 18px 0 0; color: #9eb4b4; font-size: 11px; letter-spacing: .06em; text-align: center; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 .hud-screen.youtube-mode .hud-youtube-tab { width: 100%; min-height: 38px; padding: 5px 4px; font-size: 12px; }

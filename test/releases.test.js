@@ -38,6 +38,15 @@ test('Pages release stamps the visible build ID and verifies static asset integr
   assert.equal(verified.buildId, prepared.manifest.buildId);
 });
 
+test('release verification rejects a service-worker cache generation that differs from the visible build', (t) => {
+  const output = makeTemp(); t.after(() => fs.rmSync(output, { recursive: true, force: true }));
+  const buildId = 'c'.repeat(40);
+  prepareRelease({ source: root, output, buildId });
+  const worker = path.join(output, 'service-worker.js');
+  fs.writeFileSync(worker, fs.readFileSync(worker, 'utf8').replace(buildId, 'd'.repeat(40)));
+  assert.throws(() => verifyReleaseDirectory({ root: output, expectedBuildId: buildId }), /Service-worker cache build ID/);
+});
+
 test('public publication audit rejects credential patterns and passes the intended public routes', (t) => {
   assert.equal(auditPublication(root).credentialsFound, false);
   const copy = makeTemp(); t.after(() => fs.rmSync(copy, { recursive: true, force: true }));
@@ -87,7 +96,37 @@ test('release updater detects a newer Pages build and reloads only after explici
   assert.equal(target.location.reloads, 1);
 });
 
-test('an activated verified worker automatically reloads an old page into its own release cache', () => {
+test('release updater attempts a verified check when the display online hint is false', async (t) => {
+  const current = 'a'.repeat(40); let manifestRequest = '';
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { manifestRequest = String(url); return { ok: true, json: async () => ({ buildId: current, files: {} }) }; };
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const status = { textContent: '' }; const version = { dataset: { buildId: current }, textContent: `BUILD ${current}` };
+  const document = new Target(); document.getElementById = (id) => ({ 'hud-update-status': status, 'hud-build-version': version }[id]);
+  const serviceWorker = new Target(); serviceWorker.controller = {};
+  const registration = new Target(); registration.waiting = null; registration.installing = null; registration.update = async () => {};
+  serviceWorker.register = async () => registration;
+  const updater = hud.registerHudUpdates({ serviceWorker, onLine: false }, new Target(), document);
+  await new Promise(setImmediate); await updater.check();
+  assert.match(manifestRequest, /release-manifest\.json\?check=/);
+  assert.match(status.textContent, /is current/i);
+});
+
+test('release updater uses the verified manifest when this Web App runtime rejects service workers', async (t) => {
+  const current = 'a'.repeat(40); let manifestRequest = '';
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { manifestRequest = String(url); return { ok: true, json: async () => ({ buildId: current, files: {} }) }; };
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const status = { textContent: '' }; const version = { dataset: { buildId: current }, textContent: `BUILD ${current}` };
+  const document = new Target(); document.getElementById = (id) => ({ 'hud-update-status': status, 'hud-build-version': version }[id]);
+  const serviceWorker = new Target(); serviceWorker.register = async () => { throw new Error('unsupported'); };
+  hud.registerHudUpdates({ serviceWorker, onLine: false }, new Target(), document);
+  await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.match(manifestRequest, /release-manifest\.json\?check=/);
+  assert.match(status.textContent, /is current/i);
+});
+
+test('an update activated in another tab offers an explicit reload without interrupting this page', () => {
   const current = 'a'.repeat(40); const next = 'b'.repeat(40);
   const status = { textContent: '' }; const version = { dataset: { buildId: current }, textContent: `BUILD ${current}` };
   const document = new Target(); document.getElementById = (id) => ({ 'hud-update-status': status, 'hud-build-version': version }[id]);
@@ -102,10 +141,36 @@ test('an activated verified worker automatically reloads an old page into its ow
   hud.registerHudUpdates({ serviceWorker, onLine: true }, target, document);
   serviceWorker.dispatch('message', { data: { type: 'JARVIS_HUD_UPDATE_ACTIVATED', buildId: next } });
   assert.equal(reload.hidden, false);
-  assert.equal(target.location.reloads, 1);
+  assert.equal(target.location.reloads, 0);
   serviceWorker.dispatch('message', { data: { type: 'JARVIS_HUD_UPDATE_ACTIVATED', buildId: next } });
-  assert.equal(target.location.reloads, 1, 'an update message cannot cause a reload loop');
+  assert.equal(target.location.reloads, 0, 'an update message does not interrupt an active interaction');
+  reload.click();
+  assert.equal(target.location.reloads, 1, 'the explicit reload action moves to the verified active release');
   } finally { globalThis.fetch = previousFetch; }
+});
+
+test('RELOAD LATEST waits for confirmation, and CANCEL leaves the active session and release unchanged', async () => {
+  const current = 'a'.repeat(40), next = 'b'.repeat(40);
+  const status = { textContent: '' }, version = { dataset: { buildId: current }, textContent: `BUILD ${current}` };
+  const document = new Target(); const reload = button(false, document), cancel = button(false, document), confirm = button(false, document);
+  const dialog = { shown: 0, showModal() { this.shown += 1; }, addEventListener() {} };
+  document.getElementById = (id) => ({ 'hud-update-status': status, 'hud-build-version': version, 'hud-reload-update': reload, 'jarvis-update-confirm': dialog, 'jarvis-update-cancel': cancel, 'jarvis-update-confirm-reload': confirm }[id]);
+  const serviceWorker = new Target(); serviceWorker.controller = {};
+  const waiting = { messages: [], postMessage(message) { this.messages.push(message); serviceWorker.dispatch('controllerchange'); } };
+  const registration = new Target(); registration.waiting = waiting; registration.update = async () => {};
+  serviceWorker.register = async () => registration;
+  const target = new Target(); const oldFetch = globalThis.fetch; globalThis.fetch = async () => ({ ok: true, json: async () => ({ buildId: next, files: {} }) });
+  try {
+    hud.registerHudUpdates({ serviceWorker, onLine: true }, target, document);
+    await new Promise(setImmediate);
+    reload.click(); reload.click();
+    assert.equal(dialog.shown, 1, 'repeated clicks cannot bypass or loop the confirmation');
+    assert.deepEqual(waiting.messages, []); assert.equal(target.location.reloads, 0);
+    cancel.click();
+    assert.match(status.textContent, /cancelled/i); assert.deepEqual(waiting.messages, []); assert.equal(target.location.reloads, 0);
+    reload.click(); confirm.click();
+    assert.deepEqual(waiting.messages, [{ type: 'ACTIVATE_UPDATE' }]); assert.equal(target.location.reloads, 1);
+  } finally { globalThis.fetch = oldFetch; }
 });
 
 test('an update already installing when the HUD opens is observed and exposes its verified reload action', async () => {
@@ -190,11 +255,19 @@ test('Google Apps UI gives local help for greetings without invoking the relay c
   assert.equal(state.status, 'No Google request was sent.');
 });
 
+test('Google Apps connectivity action only renders the sanitized relay report', async () => {
+  const state = { busy: false, result: '', status: '' };
+  const actions = hud.createGoogleAppsActions({ state, connector: { runCommand: async (command) => { assert.equal(command, '__JARVIS_GOOGLE_CONNECTIVITY_TEST_V1__'); return 'Gmail: PASS\nDocs: NO DATA'; } }, hud: { snapshot: () => ({ screen: 'connect-apps' }) } });
+  await actions.testAllApps();
+  assert.equal(state.result, 'Gmail: PASS\nDocs: NO DATA');
+  assert.equal(state.status, 'Google Apps connectivity test complete.');
+});
+
 test('canonical HUD retains the existing menu, passkey staging page, YouTube, and Google pairing entry points', () => {
   const ids = hud.MENU.map((item) => item.id);
   assert.deepEqual(ids, ['ai', 'vision', 'media', 'connect-apps', 'settings']);
   assert.equal(hud.MENU.find((item) => item.id === 'vision').available, false, 'camera Vision remains explicitly unavailable pending native integration');
-  for (const file of ['staging-passkey.html', 'staging-passkey.js', 'auth-config.js', 'unlock.html', 'unlock.js', 'youtube-player.js', 'connectors.js', 'connectors-config.js']) assert.equal(fs.existsSync(path.join(root, file)), true, `${file} remains part of the canonical app`);
+  for (const file of ['staging-passkey.html', 'staging-passkey.js', 'staging-apps-connect.html', 'staging-apps-connect.js', 'auth-config.js', 'unlock.html', 'unlock.js', 'youtube-player.js', 'connectors.js', 'connectors-config.js', 'google-apps.html', 'google-apps.js']) assert.equal(fs.existsSync(path.join(root, file)), true, `${file} remains part of the canonical app`);
   const authConfig = fs.readFileSync(path.join(root, 'auth-config.js'), 'utf8');
   assert.match(authConfig, /enabled: false/);
   assert.equal(hud.shouldWaitForSession({ enabled: true }, 'locked'), true);
@@ -204,6 +277,27 @@ test('canonical HUD retains the existing menu, passkey staging page, YouTube, an
   assert.equal(unlock.trustedWorker({ enabled: true, workerUrl: 'https://attacker.example' }, { origin: 'https://xiongh.github.io' }), '');
   assert.equal(unlock.trustedWorker({ enabled: true, workerUrl: 'https://jarvis-auth.test.workers.dev' }, { origin: 'https://attacker.example' }), '');
   assert.match(fs.readFileSync(path.join(root, 'connectors.js'), 'utf8'), /pairingAlias/);
+});
+
+test('staging approval entry point uses only isolated Workers and keeps the owner bearer out of persistent storage', () => {
+  const html = fs.readFileSync(path.join(root, 'staging-apps-connect.html'), 'utf8');
+  const script = fs.readFileSync(path.join(root, 'staging-apps-connect.js'), 'utf8');
+  assert.match(html, /staging-pairing-id/); assert.match(html, /staging-pairing-code/);
+  assert.match(script, /jarvis-auth-staging\.hlao-xiong\.workers\.dev/);
+  assert.match(script, /jarvis-connected-apps-staging\.hlao-xiong\.workers\.dev/);
+  assert.match(script, /\/v1\/owner\/hud\/pairings\/approve/);
+  assert.match(script, /\/v1\/logout/);
+  assert.doesNotMatch(`${html}\n${script}`, /localStorage|sessionStorage|indexedDB|desktop-frvv2vt\.taile1cf65\.ts\.net|jarvis-glasses-connected-apps\.hlao-xiong\.workers\.dev/);
+});
+
+test('limited Google Apps staging entry point has no OAuth, pairing, passkey, or data-rendering surface', () => {
+  const html = fs.readFileSync(path.join(root, 'google-apps.html'), 'utf8');
+  const script = fs.readFileSync(path.join(root, 'google-apps.js'), 'utf8');
+  assert.match(html, /RESTORE PAIRED AUTHORIZATION/);
+  assert.match(html, /google-apps\.js\?staging-google-test=1/);
+  assert.doesNotMatch(`${html}\n${script}`, /oauth|startPairing|credentials\.get|unlock\.js/i);
+  assert.match(script, /NOT TESTED/);
+  assert.match(script, /safeLine/);
 });
 
 test('YouTube pairing keeps its opaque request ID private and returns only the short phone code/link', async () => {

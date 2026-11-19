@@ -84,6 +84,10 @@
     const worker = trustedWorker(windowObject.JARVIS_AUTH_CONFIG, windowObject.location);
     const POLL_INTERVAL_MS = 6_000; const POLL_BACKOFF_MIN_MS = 10_000; const POLL_BACKOFF_MAX_MS = 30_000;
     let timer = null; let expiryTimer = null; let expiry = 0; let generation = 0; let busy = false; let unlocked = false; let pollInFlight = false; let pollDelay = POLL_INTERVAL_MS; let restoreInFlight = null;
+    // A refresh may briefly dispatch visibilitychange while the browser is
+    // restoring its page.  That must not classify a still-valid cookie as
+    // locked before the server-side restore request has answered.
+    let startupSessionPending = windowObject.JARVIS_AUTH_CONFIG?.sessionRestore === true;
     const say = (message) => { status.textContent = message; };
     // Staging-only, intentionally non-secret observability.  It records
     // outcomes, never headers, cookies, assertions, tokens, or credentials.
@@ -137,7 +141,9 @@
     const start = async () => {
       stop(); setLocked('');
       if (!worker) { say('Phone unlock is not configured. This page stays locked until the approved JARVIS Auth Worker URL is set in this release.'); return false; }
-      if (navigatorObject.onLine === false) { say('Connect to the internet to request a phone approval.'); return false; }
+      // The display Web App can report navigator.onLine as false while its
+      // network stack is available.  Treat it only as a hint: the protected
+      // request below is the authority and gives the user the real outcome.
       busy = true; retry.disabled = true; say('Creating a short-lived glasses unlock request…');
       const run = generation;
       try {
@@ -153,7 +159,7 @@
       if (restoreInFlight) return restoreInFlight;
       setChecking();
       restoreInFlight = (async () => {
-      if (!worker || navigatorObject.onLine === false) { diagnose({ restore: navigatorObject.onLine === false ? 'network-unavailable' : 'not-configured' }); setLocked('Session check could not run. Unlock again with your iPhone.'); return false; }
+      if (!worker) { diagnose({ restore: 'not-configured' }); setLocked('Session check could not run. Unlock again with your iPhone.'); return false; }
       try {
         diagnose({ restore: 'requested' });
         const result = await request(fetchImpl, worker, '/v1/hud/session/restore', {}, { credentials: 'include', headers: { 'X-Jarvis-HUD': 'restore' } });
@@ -162,8 +168,8 @@
         unlock(result.expiresAt);
         windowObject.dispatchEvent?.(new CustomEvent('jarvis-glasses-assertion', { detail: { assertion: result.assertion, expiresAt: result.assertionExpiresAt * 1000 } }));
         return true;
-      } catch { diagnose({ restore: 'rejected' }); setLocked('Your JARVIS session is locked. Unlock again with your iPhone.'); return false; }
-      })().finally(() => { restoreInFlight = null; });
+      } catch (error) { diagnose({ restore: error?.status === 401 ? 'rejected' : 'unavailable' }); setLocked(error?.status === 401 ? 'Your JARVIS session is locked. Unlock again with your iPhone.' : 'Session check could not reach JARVIS. Unlock again with your iPhone.'); return false; }
+      })().finally(() => { startupSessionPending = false; restoreInFlight = null; });
       return restoreInFlight;
     };
     const lockNow = async () => {
@@ -184,7 +190,8 @@
       if (faceId.disabled) return;
       if (!worker) { say('Direct iPhone unlock is not configured for this trusted JARVIS release.'); return; }
       if (!navigatorObject.credentials?.get || !windowObject.PublicKeyCredential) { say('This browser does not support passkeys. Use current Safari on your iPhone.'); return; }
-      if (navigatorObject.onLine === false) { say('Connect to the internet to unlock with Face ID.'); return; }
+      // See start(): navigator.onLine is not reliable in every glasses Web
+      // App runtime, so let the authenticated Worker request decide.
       faceId.disabled = true;
       try {
         // This endpoint creates a fresh, single-use transaction. It never
@@ -212,7 +219,14 @@
       } finally { faceId.disabled = false; }
     });
     documentObject.addEventListener('keydown', (event) => { if (!unlocked && !event.target?.closest?.('[data-update-controls]')) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
-    documentObject.addEventListener('visibilitychange', () => { if (documentObject.hidden) { stop(); if (!unlocked) setLocked('JARVIS is locked.'); } else if (expiry && expiry <= now()) { stop(); setLocked('Your JARVIS session expired. Approve again on your iPhone.'); void start(); } else if (!unlocked && !busy) void start(); });
+    documentObject.addEventListener('visibilitychange', () => {
+      // Do not render LOCKED during the only period where the session is
+      // unknown. The restore result is the authority for that transition.
+      if (startupSessionPending) return;
+      if (documentObject.hidden) { stop(); if (!unlocked) setLocked('JARVIS is locked.'); }
+      else if (expiry && expiry <= now()) { stop(); setLocked('Your JARVIS session expired. Approve again on your iPhone.'); void start(); }
+      else if (!unlocked && !busy) void start();
+    });
     report(); setChecking();
     if (windowObject.JARVIS_AUTH_CONFIG?.sessionRestore === true) void restore();
     else void start();

@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createHud, handleConnectAppsKey, createGoogleAppsActions, bindConnectAppsAction } = require('../app');
+const { createHud, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction } = require('../app');
 const { createGoogleConnectorClient } = require('../connectors');
 
 const makeAppsHud = () => {
@@ -145,4 +145,50 @@ test('startup stays restoring during a slow saved-approval check and redraws con
   assert.equal(state.busy, false);
   assert.match(state.status, /connected: gmail/i);
   assert.ok(renders.some((view) => /connected/i.test(view.status)));
+});
+
+test('Face ID owner management uses only the handoff and owner grant routes, never a Pair ID route', async () => {
+  const calls = [];
+  const client = createOwnerAppsClient({ authWorker: 'https://auth.example', appsWorker: 'https://apps.example', fetchImpl: async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith('/v1/connected-apps/handoff')) return { ok: true, status: 201, json: async () => ({ handoff: 'h'.repeat(43) }) };
+    if (String(url).endsWith('/v1/owner/session/handoff')) return { ok: true, status: 200, json: async () => ({ authenticated: true }) };
+    if (String(url).endsWith('/v1/owner/google/grant')) return { ok: true, status: 200, json: async () => ({ connected: true, apps: ['gmail'] }) };
+    throw new Error('unexpected route');
+  } });
+  await client.authorize(); const grant = await client.status();
+  assert.deepEqual(grant.apps, ['gmail']);
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), ['/v1/connected-apps/handoff', '/v1/owner/session/handoff', '/v1/owner/google/grant']);
+  assert.equal(calls.some((call) => call.url.includes('/v1/hud/pairings')), false);
+});
+
+test('a fresh owner handoff recovers an existing Google grant after a revoked pre-LOCK session', async () => {
+  const calls = []; let grantChecks = 0;
+  const client = createOwnerAppsClient({ authWorker: 'https://auth.example', appsWorker: 'https://apps.example', fetchImpl: async (url, init) => {
+    calls.push({ url: String(url), init }); const route = new URL(url).pathname;
+    if (route === '/v1/owner/google/grant' && grantChecks++ === 0) return { ok: false, status: 401, json: async () => ({ error: 'Owner session expired or was revoked.' }) };
+    if (route === '/v1/connected-apps/handoff') return { ok: true, status: 201, json: async () => ({ handoff: 'h'.repeat(43) }) };
+    if (route === '/v1/owner/session/handoff') return { ok: true, status: 200, json: async () => ({ authenticated: true }) };
+    if (route === '/v1/owner/google/grant') return { ok: true, status: 200, json: async () => ({ connected: true, apps: ['gmail', 'google-drive'] }) };
+    throw new Error('unexpected route');
+  }});
+  await assert.rejects(client.status(), (error) => error.status === 401);
+  await client.authorize(); const grant = await client.status();
+  assert.deepEqual(grant.apps, ['gmail', 'google-drive']);
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), ['/v1/owner/google/grant', '/v1/connected-apps/handoff', '/v1/owner/session/handoff', '/v1/owner/google/grant']);
+  assert.equal(calls[2].init.credentials, 'include'); assert.equal(calls[2].init.headers['X-Jarvis-HUD'], 'connected-apps');
+});
+
+test('an already-connected owner session can make a read-only AI Chat Google request without a device pairing', async () => {
+  const calls = [];
+  const client = createOwnerAppsClient({ authWorker: 'https://auth.example', appsWorker: 'https://apps.example', fetchImpl: async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith('/v1/owner/google/commands')) return { ok: true, status: 200, json: async () => ({ content: '1. Synthetic calendar event', status: 'completed' }) };
+    throw new Error('unexpected route');
+  } });
+  assert.deepEqual(await client.readCommand("What's on my calendar tomorrow?"), { content: '1. Synthetic calendar event', status: 'completed' });
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), ['/v1/owner/google/commands']);
+  assert.equal(calls[0].init.credentials, 'include');
+  assert.equal(calls[0].init.headers['X-Jarvis-HUD'], 'connected-apps');
+  const body = JSON.parse(calls[0].init.body); assert.equal(body.message, "What's on my calendar tomorrow?"); assert.equal(typeof body.timeZone, 'string'); assert.ok(body.timeZone.length > 0);
 });

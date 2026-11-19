@@ -17,7 +17,7 @@ const transaction = (character) => character.repeat(24);
 const pollSecret = (character) => character.repeat(43);
 
 async function main() {
-  let starts = 0; let polls = 0; let exchanges = 0;
+  let starts = 0; let polls = 0; let exchanges = 0; const chatRequests = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1'); const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     const safe = normalize(relative).replace(/^([.][.][\\/])+/, '');
@@ -43,9 +43,16 @@ async function main() {
     });
     await page.route('https://jarvis-staging-chat-relay.hlao-xiong.workers.dev/**', async (route) => {
       const path = new URL(route.request().url()).pathname;
-      if (path !== '/v1/exchange') return route.abort();
-      exchanges += 1;
-      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ capability: 'd'.repeat(43), expiresAt: Date.now() + 50_000 }) });
+      if (path === '/v1/exchange') {
+        exchanges += 1;
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ capability: 'd'.repeat(43), expiresAt: Date.now() + 50_000 }) });
+      }
+      if (path === '/v1/chat' && route.request().method() === 'POST') {
+        chatRequests.push(JSON.parse(route.request().postData() || '{}'));
+        return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: `${String(chatRequests.length).padStart(2, '0')}${'e'.repeat(22)}` }) });
+      }
+      if (/^\/v1\/chat\/[A-Za-z0-9_-]{24}$/.test(path)) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ state: 'done', reply: `Synthetic reply ${chatRequests.length}.` }) });
+      return route.abort();
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => document.body.dataset.jarvisSession === 'locked');
@@ -56,6 +63,31 @@ async function main() {
     await page.getByRole('button', { name: /^AI/ }).click();
     await page.getByText('CONNECTED · AUTHORIZED STAGING CHAT').waitFor();
     assert.equal(exchanges, 1, 'the companion assertion exchanges once');
+    const prompt = page.getByRole('textbox', { name: 'Message for JARVIS' });
+    await prompt.fill('Hello JARVIS, what can you help me with?');
+    await page.getByRole('button', { name: 'SEND' }).click();
+    await page.getByText('JARVIS: Synthetic reply 1.').waitFor();
+    await prompt.fill('Can you explain that in more detail?');
+    await page.getByRole('button', { name: 'SEND' }).click();
+    await page.getByText('JARVIS: Synthetic reply 2.').waitFor();
+    assert.deepEqual(chatRequests[0].history, [], 'the first chat request starts without history');
+    assert.deepEqual(chatRequests[1].history, [
+      { role: 'user', content: 'Hello JARVIS, what can you help me with?' },
+      { role: 'assistant', content: 'Synthetic reply 1.' },
+    ], 'a follow-up sends only bounded transient context');
+    // The visible transcript has a separate, session-only bound from the
+    // compact relay context. It must retain enough entries to overflow and
+    // remain scrollable during an ordinary conversation.
+    for (let i = 3; i <= 7; i += 1) {
+      await prompt.fill(`Follow-up ${i}`);
+      await page.getByRole('button', { name: 'SEND' }).click();
+      await page.getByText(`JARVIS: Synthetic reply ${i}.`).waitFor();
+    }
+    const transcript = page.locator('.chat-log');
+    assert.equal(await transcript.evaluate((node) => getComputedStyle(node).overflowY), 'scroll');
+    assert.equal(await transcript.evaluate((node) => node.scrollHeight > node.clientHeight), true, 'long conversation overflows the visible transcript');
+    await transcript.evaluate((node) => { node.scrollTop = 0; });
+    assert.equal(await transcript.evaluate((node) => node.scrollTop), 0, 'earlier session messages remain reachable by scrolling');
     mkdirSync(screenshots, { recursive: true });
     await page.screenshot({ path: join(screenshots, 'staging-chat-connected.png'), fullPage: true });
 
@@ -68,7 +100,7 @@ async function main() {
     await page.getByText('CONNECTED · AUTHORIZED STAGING CHAT').waitFor();
     assert.equal(exchanges, 2, 're-lock requires and accepts a fresh assertion');
     assert.deepEqual(errors, [], `uncaught browser errors: ${errors.join('; ')}`);
-    process.stdout.write(JSON.stringify({ result: 'passed', starts, polls, exchanges, screenshot: join(screenshots, 'staging-chat-connected.png') }) + '\n');
+    process.stdout.write(JSON.stringify({ result: 'passed', starts, polls, exchanges, chatRequests: chatRequests.length, screenshot: join(screenshots, 'staging-chat-connected.png') }) + '\n');
   } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }
 }
 

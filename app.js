@@ -8,6 +8,127 @@
   const YOUTUBE_API_PREFIX = '/v1/youtube';
   const DEFAULT_YOUTUBE_WORKER_ORIGIN = 'https://jarvis-glasses-youtube.hlao-xiong.workers.dev';
   const RELEASE_MANIFEST_URL = './release-manifest.json';
+  const GOOGLE_APP_TERMS = /\b(?:e-?mails?|gmail|inbox|mail|messages?|calendar|meetings?|appointments?|events?|contacts?|phone number|email address|drive|gle|files?|folders?|doc(?:ument)?s?|sheets?|spreadsheets?|tasks?|to-do|todo|reminders?)\b/i;
+  const GOOGLE_READ_TERMS = /\b(?:what(?:'s|s| is)?|show|find|search|look up|list|read|open|summari[sz]e|summeri[sz]e|upcoming|latest|newest|unfinished|completed|first|last|next)\b/i;
+  const DRIVE_SELECTION_TERMS = /\b(?:doc(?:ument)?|file|item|pdf|sheet|spreadsheet)\s*(?:number\s*)?\d{1,2}\b|\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:doc(?:ument)?|file|item|pdf|sheet|spreadsheet)\b/i;
+
+  // This is a routing hint only. The Connected Apps Worker performs the
+  // authoritative, owner-bound app allowlist and exposes read-only adapters.
+  function isGoogleReadRequest(value) {
+    const text = String(value || '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").trim();
+    return text.length > 0 && text.length <= 1200 && GOOGLE_APP_TERMS.test(text) && (GOOGLE_READ_TERMS.test(text) || DRIVE_SELECTION_TERMS.test(text));
+  }
+  function googleAppHint(value) {
+    const text = String(value || '').toLowerCase();
+    if (/\b(?:e-?mails?|gmail|inbox|mail|messages?)\b/.test(text)) return 'gmail';
+    if (/\b(?:calendar|meeting|appointment|event)\b/.test(text)) return 'calendar';
+    if (/\bcontacts?|phone number|email address\b/.test(text)) return 'contacts';
+    if (/\b(?:drive|gle|files?|folders?)\b/.test(text)) return 'drive';
+    if (/\b(?:docs?|documents?)\b/.test(text)) return 'documents';
+    if (/\b(?:sheets?|spreadsheets?)\b/.test(text)) return 'sheets';
+    if (/\b(?:tasks?|to-do|todo|reminder)\b/.test(text)) return 'tasks';
+    return '';
+  }
+  function isGoogleFollowUp(value) {
+    const text = String(value || '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").trim();
+    return text.length > 0 && text.length <= 300 && /\b(?:it|them|that|those|one|ones|number|email|emails|message|messages|first|second|third|latest|next|last)\b/i.test(text) && /\b(?:what|how|show|find|read|open|about|summari[sz]e|summeri[sz]e|first|second|third|latest|next|last)\b/i.test(text);
+  }
+  const subjectWords = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((word) => word.length >= 3);
+  const nearWord = (left, right) => { if (left === right) return true; if (Math.abs(left.length - right.length) > 1) return false; let a = 0; let b = 0; let edits = 0; while (a < left.length && b < right.length) { if (left[a] === right[b]) { a += 1; b += 1; continue; } if (++edits > 1) return false; if (left.length > right.length) a += 1; else if (right.length > left.length) b += 1; else { a += 1; b += 1; } } return true; };
+  function matchesRecentGmailSubject(value, subjects) {
+    const phrase = String(value || '').trim().toLowerCase(); const words = subjectWords(phrase);
+    if (!phrase || phrase.length > 240 || !words.length || !Array.isArray(subjects)) return false;
+    return subjects.some((subject) => { const normalizedSubject = String(subject || '').toLowerCase(); const candidates = subjectWords(subject); const matches = words.filter((word) => normalizedSubject.includes(word) || word.length >= 5 && candidates.some((candidate) => nearWord(word, candidate))).length; return normalizedSubject.includes(phrase) || matches >= (words.length > 2 ? 2 : 1); });
+  }
+  // Status questions must not be answered by the model.  The authenticated
+  // Connected Apps status endpoint is the only source of truth for whether an
+  // owner-bound Google grant exists and which app adapters remain enabled.
+  function isGoogleStatusRequest(value) {
+    const text = String(value || '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").trim();
+    return text.length > 0 && text.length <= 500
+      && /\b(?:connected|connection|access|available|authorized|authorization|applications?|apps?)\b|\bcan\s+you\s+(?:see|access)\s+(?:my\s+)?/i.test(text)
+      && /\b(?:google|gmail|drive|calendar|contacts?|docs?|documents?|sheets?|tasks?)\b/i.test(text);
+  }
+  function isGoogleRetryRequest(value) {
+    const text = String(value || '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").trim();
+    return /^(?:please\s+)?(?:try\s+again|retry(?:\s+(?:that|it))?)\.?$/i.test(text);
+  }
+  function usableGoogleRetry(operation, stamp = Date.now()) {
+    return Boolean(operation && typeof operation.message === 'string' && operation.message.length > 0 && operation.message.length <= 1200
+      && ['gmail', 'calendar', 'contacts', 'drive', 'documents', 'sheets', 'tasks'].includes(operation.app)
+      && Number.isFinite(operation.createdAt) && stamp - operation.createdAt >= 0 && stamp - operation.createdAt <= 5 * 60 * 1000);
+  }
+  function isGoogleStatusFollowUp(value) {
+    const text = String(value || '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").trim();
+    return text.length > 0 && text.length <= 160 && /\b(?:how|what|and)\s+(?:about\s+)?now\b|\bnow\?$/i.test(text);
+  }
+  function googleStatusReply(grant, requestedApp = '') {
+    const appLabels = { gmail: 'Gmail', calendar: 'Google Calendar', contacts: 'Google Contacts', drive: 'Google Drive', documents: 'Google Docs', sheets: 'Google Sheets', tasks: 'Google Tasks' };
+    const grantApps = { gmail: 'gmail', calendar: 'google-calendar', contacts: 'google-contacts', drive: 'google-drive', documents: 'google-docs', sheets: 'google-sheets', tasks: 'google-tasks' };
+    const app = requestedApp && appLabels[requestedApp] ? requestedApp : '';
+    const label = appLabels[app] || 'Google Apps';
+    const enabled = new Set(Array.isArray(grant?.apps) ? grant.apps : []);
+    const disabled = new Set(Array.isArray(grant?.disabledApps) ? grant.disabledApps : []);
+    const state = String(grant?.authorizationState || (grant?.reconnectRequired ? 'revoked' : grant?.connected ? 'connected' : 'disconnected'));
+    if (state === 'revoked') return 'Google Apps authorization was revoked and must be reconnected by the owner. No Google read was sent.';
+    if (state === 'disconnected' || !grant?.connected) return 'Google Apps is not connected for this owner session. No Google read was sent.';
+    if (app && !enabled.has(grantApps[app])) return `${label} is not authorized for this owner session. No Google read was sent.`;
+    if (app && disabled.has(grantApps[app])) return `${label} is authorized but currently disabled. Enable it in CONNECT APPS before making a read-only request.`;
+    if (state === 'expired') return app ? `${label} authorization is present, but its temporary provider access has expired. JARVIS will securely renew it only when you make an allowed read-only request.` : 'Google Apps authorization is present, but its temporary provider access has expired. JARVIS will securely renew it only when you make an allowed read-only request.';
+    if (app) return `${label} is authorized and enabled for read-only JARVIS requests. This confirms authorization, not current Gmail/Google API availability. No Google read was sent.`;
+    return `Google Apps authorization is active for ${enabled.size} approved read-only app${enabled.size === 1 ? '' : 's'}. No Google read was sent.`;
+  }
+  function isConversationRecapRequest(value) {
+    const text = String(value || '').normalize('NFKC').toLowerCase();
+    return /\b(?:summari[sz](?:e|es)|summeri[sz](?:e|es)|recap)\b/.test(text) && /\b(?:we|conversation|chat|talked|discussed|just)\b/.test(text);
+  }
+  function isConversationTimelineFollowUp(value) {
+    const text = String(value || '').normalize('NFKC').toLowerCase();
+    return /\b(?:before|after)\b/.test(text) && /\b(?:about|aobut|that|it)\b/.test(text);
+  }
+  function createConversationMemory() {
+    let entries = [];
+    const short = (value, limit) => String(value || '').replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit);
+    const add = (entry) => { entries.push(entry); if (entries.length > 12) entries = entries.slice(-12); };
+    const appName = (app) => ({ gmail: 'Gmail', calendar: 'Calendar', contacts: 'Contacts', drive: 'Google Drive', documents: 'Google Docs', sheets: 'Google Sheets', tasks: 'Google Tasks' }[app] || 'Google Apps');
+    return Object.freeze({
+      clear: () => { entries = []; },
+      get size() { return entries.length; },
+      recordChat: (user, assistant, model) => add({ kind: 'chat', user: short(user, 260), assistant: short(assistant, 320), model: model === 'granite' ? 'Granite' : 'GLM' }),
+      recordGoogle: (app, status) => add({ kind: 'google', app: appName(app), status: ['completed', 'empty', 'selected', 'analyzing'].includes(status) ? status : 'requested' }),
+      safeModelContext: () => entries.filter((entry) => entry.kind === 'google').slice(-2).map((entry) => ({ role: 'assistant', content: `[Session note: a read-only ${entry.app} request ${entry.status}. Private Google results are not included in AI context.]` })),
+      recap: () => entries.length ? `Session recap for this unlocked session:\n${entries.map((entry, index) => entry.kind === 'chat' ? `${index + 1}. You asked: “${entry.user}” JARVIS (${entry.model}) replied: “${entry.assistant}”` : `${index + 1}. You made a read-only ${entry.app} request (${entry.status}). Its private result details are not included in AI memory.`).join('\n')}` : 'There are no earlier messages in this unlocked session to recap.',
+    });
+  }
+  // The transport accepts `{ role, text }`; memory's provider-safe notes use
+  // `content` so they cannot be accidentally rendered as ordinary chat.  Make
+  // that boundary explicit here and retain only the newest valid context that
+  // fits the relay's fixed limits.
+  function boundedModelHistory(items) {
+    const source = Array.isArray(items) ? items.slice(-12) : [];
+    const accepted = []; let size = 0;
+    for (let index = source.length - 1; index >= 0 && accepted.length < 6; index -= 1) {
+      const item = source[index] || {};
+      if (!['user', 'assistant'].includes(item.role)) continue;
+      const text = String(item.text ?? item.content ?? '').replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 800);
+      if (!text || size + text.length > 3600) continue;
+      accepted.push({ role: item.role, text }); size += text.length;
+    }
+    return accepted.reverse();
+  }
+  function createVisibleTranscript(limit = 120) {
+    const boundedLimit = Number.isInteger(limit) && limit >= 12 && limit <= 240 ? limit : 120;
+    const streams = { glm: [], granite: [] };
+    return Object.freeze({
+      append(model, ...entries) {
+        const stream = streams[model] || streams.glm;
+        for (const entry of entries) if (entry && ['user', 'assistant'].includes(entry.role) && typeof entry.text === 'string') stream.push({ role: entry.role, text: entry.text, kind: entry.kind || '' });
+        if (stream.length > boundedLimit) stream.splice(0, stream.length - boundedLimit);
+      },
+      entries: (model) => [...(streams[model] || streams.glm)],
+      clear: () => { streams.glm = []; streams.granite = []; },
+    });
+  }
 
   function normalizeBackendOrigin(value) {
     try {
@@ -168,6 +289,9 @@
     const versions = collect('[data-hud-build-version]', 'hud-build-version');
     const checkButtons = collect('[data-hud-check-updates]', 'hud-check-updates');
     const reloadButtons = collect('[data-hud-reload-update]', 'hud-reload-update');
+    const updateDialog = documentObject?.getElementById?.('jarvis-update-confirm');
+    const updateReload = documentObject?.getElementById?.('jarvis-update-confirm-reload');
+    const updateCancel = documentObject?.getElementById?.('jarvis-update-cancel');
     if (!serviceWorker?.register) {
       checkButtons.forEach((button) => { button.disabled = true; });
       reloadButtons.forEach((button) => { button.hidden = true; });
@@ -180,6 +304,7 @@
     let latestBuildId = '';
     let activatedUpdateId = '';
     let installingTimer = null;
+    let updatePromptOpen = false;
     const show = (message) => { statuses.forEach((status) => { status.textContent = message; }); };
     const showReload = (visible) => { reloadButtons.forEach((button) => { button.hidden = !visible; }); };
     const currentBuild = () => versions[0]?.dataset?.buildId || '';
@@ -188,7 +313,7 @@
       versions.forEach((version) => { version.dataset.buildId = buildId; version.textContent = `BUILD ${buildId === 'local' ? 'LOCAL' : buildId.slice(0, 12)}`; });
     };
     const checkManifest = async () => {
-      if (!globalThis.fetch || navigatorObject.onLine === false) return false;
+      if (!globalThis.fetch) return false;
       try {
         // A unique query key bypasses this release's cache-first service worker.
         const response = await globalThis.fetch(`${RELEASE_MANIFEST_URL}?check=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } });
@@ -199,6 +324,14 @@
         show('Release check unavailable. The current HUD remains available.');
         return false;
       }
+    };
+    const checkWithoutWorker = async () => {
+      const manifest = await checkManifest();
+      if (!manifest) return false;
+      latestBuildId = manifest.buildId;
+      if (manifest.buildId === currentBuild()) show(`JARVIS ${currentBuild().slice(0, 12)} is current.`);
+      else show(`JARVIS ${manifest.buildId.slice(0, 12)} is available. This Web App runtime cannot activate updates automatically; close and reopen JARVIS to load it.`);
+      return true;
     };
     const releaseReady = () => {
       if (installingTimer) { target.clearTimeout?.(installingTimer); installingTimer = null; }
@@ -222,7 +355,7 @@
       }, 20_000) || null;
     };
     const check = async () => {
-      if (!registration || navigatorObject.onLine === false) return Promise.resolve(false);
+      if (!registration) return checkWithoutWorker();
       checkButtons.forEach((button) => { button.disabled = true; });
       show('Checking for a verified JARVIS release…');
       const manifest = await checkManifest();
@@ -261,7 +394,17 @@
       target.location?.reload?.();
     };
     checkButtons.forEach((button) => button.addEventListener?.('click', () => { void check(); }));
-    reloadButtons.forEach((button) => button.addEventListener?.('click', activateLatest));
+    const requestActivateLatest = () => {
+      if (!registration?.waiting) return activateLatest();
+      if (updatePromptOpen) return;
+      updatePromptOpen = true;
+      if (typeof updateDialog?.showModal === 'function') updateDialog.showModal();
+      else if (target.confirm?.("Reloading JARVIS will apply the latest version.\n\nYour active session will be restored automatically if it is still valid. Otherwise, you'll need to unlock again with your iPhone.")) activateLatest();
+      else activateLatest(); // non-DOM test/runtime fallback; reviewed HUD releases always include the dialog
+    };
+    reloadButtons.forEach((button) => button.addEventListener?.('click', requestActivateLatest));
+    updateReload?.addEventListener?.('click', () => { updatePromptOpen = false; activateLatest(); });
+    updateCancel?.addEventListener?.('click', () => { updatePromptOpen = false; show('Update cancelled. The current JARVIS session remains unchanged.'); });
     documentObject?.addEventListener?.('keydown', (event) => { if (handleUpdateControlsKey(event, documentObject)) event.stopImmediatePropagation?.(); }, true);
     serviceWorker.addEventListener?.('controllerchange', () => {
       reloadAfterActivation();
@@ -272,11 +415,9 @@
         if (activatedBuildId && activatedBuildId !== currentBuild()) {
           activatedUpdateId = activatedBuildId;
           showReload(true);
-          // The worker has already verified and activated its complete cache.
-          // Reload once so this old JavaScript cannot continue beside the new
-          // controller and make normal reloads depend on a hard refresh.
-          reloadRequested = true;
-          reloadAfterActivation();
+          // An activation notice can arrive from another tab. Keep this page
+          // usable and let its explicit RELOAD LATEST action decide when to
+          // switch controllers.
         }
         else if (reloadRequested) reloadAfterActivation();
       }
@@ -296,9 +437,7 @@
       watchInstalling();
       setCurrentBuild(currentBuild());
       void check();
-    }).catch(() => show(navigatorObject.onLine === false
-      ? 'Offline. The current HUD remains available; updates will be checked when online.'
-      : 'Update check unavailable. The current HUD remains available.'));
+    }).catch(() => { void checkWithoutWorker(); });
     return { check, activateLatest };
   }
 
@@ -423,11 +562,47 @@
         catch (error) { state.status = error.message || 'Google lookup failed.'; }
         finally { state.busy = false; redraw(); }
       },
+      async testAllApps() {
+        state.busy = true; state.status = 'Testing seven read-only Google Apps connections…'; state.result = ''; redraw();
+        try { state.result = await connector.runCommand(globalThis.jarvisGoogleConnectors?.CONNECTIVITY_TEST_COMMAND || '__JARVIS_GOOGLE_CONNECTIVITY_TEST_V1__'); state.status = 'Google Apps connectivity test complete.'; }
+        catch (error) { state.status = error.message || 'Google Apps connectivity test failed.'; }
+        finally { state.busy = false; redraw(); }
+      },
       clear() {
         connector.clear(); state.pairing = null; state.result = ''; state.status = 'Authorization cleared from this glasses session.'; redraw();
       },
     };
     return api;
+  }
+
+  // This client deliberately keeps only the one-use handoff in memory.  The
+  // Connected Apps Worker converts it to an HttpOnly, owner-bound cookie; no
+  // Auth bearer or Google credential is ever exposed to HUD JavaScript.
+  function createOwnerAppsClient({ authWorker, appsWorker, fetchImpl = globalThis.fetch, onDiagnostic = () => {} } = {}) {
+    const request = async (origin, path, options = {}) => {
+      const stage = options.stage || 'unknown'; onDiagnostic({ stage, state: 'attempted' });
+      let response;
+      try { response = await fetchImpl(`${origin}${path}`, { method: options.method || 'GET', credentials: 'include', mode: 'cors', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...((options.handoff || options.csrf) ? { 'X-Jarvis-HUD': 'connected-apps' } : {}) }, ...(options.body ? { body: JSON.stringify(options.body) } : {}) }); }
+      catch { const error = new Error('Owner authorization request could not be completed.'); error.category = 'network-or-cors'; onDiagnostic({ stage, state: 'failed', category: error.category }); throw error; }
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) { const error = new Error(body.error || 'Owner authorization failed.'); error.status = response.status; error.category = response.status === 401 ? 'session-unavailable' : response.status === 409 ? 'handoff-replayed-or-expired' : response.status === 403 ? 'origin-or-csrf-denied' : response.status >= 500 ? 'service-unavailable' : 'request-rejected'; onDiagnostic({ stage, state: 'failed', status: response.status, category: error.category }); throw error; }
+      onDiagnostic({ stage, state: 'success', status: response.status }); return body;
+    };
+    return Object.freeze({
+      async authorize() { const handoff = await request(authWorker, '/v1/connected-apps/handoff', { method: 'POST', body: {}, handoff: true, stage: 'handoff-issuance' }); if (!/^[A-Za-z0-9_-]{43}$/.test(handoff.handoff || '')) { const error = new Error('Owner authorization failed.'); error.category = 'invalid-handoff-response'; onDiagnostic({ stage: 'handoff-issuance', state: 'failed', category: error.category }); throw error; } return request(appsWorker, '/v1/owner/session/handoff', { method: 'POST', body: { handoff: handoff.handoff }, handoff: true, stage: 'handoff-redemption' }); },
+      status: () => request(appsWorker, '/v1/owner/google/grant', { stage: 'google-grant-status' }),
+      readCommand: async (message) => {
+        let timeZone = 'UTC'; try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || timeZone; } catch {}
+        const value = await request(appsWorker, '/v1/owner/google/commands', { method: 'POST', body: { message: String(message || '').trim(), timeZone }, csrf: true, stage: 'google-read-command' });
+        if (typeof value?.content !== 'string' || value.content.length > 5000) throw new Error('Google read response was invalid.');
+        if (value.analysis !== undefined && (!value.analysis || typeof value.analysis.instruction !== 'string' || typeof value.analysis.text !== 'string' || value.analysis.instruction.length > 1200 || value.analysis.text.length > 6000)) throw new Error('Google read response was invalid.');
+        const diagnostic = value?.diagnostic;
+        if (diagnostic && typeof diagnostic === 'object' && ['provider-read', 'provider-response', 'grant-read', 'grant-refresh'].includes(diagnostic.stage) && /^[a-z0-9_-]{1,48}$/.test(diagnostic.category || '') && (diagnostic.providerStatus === undefined || Number.isInteger(diagnostic.providerStatus) && diagnostic.providerStatus >= 400 && diagnostic.providerStatus <= 599)) onDiagnostic({ stage: 'google-read-command', state: 'provider-failure', status: diagnostic.providerStatus, category: diagnostic.category });
+        return value;
+      },
+      connect: (apps) => request(appsWorker, '/v1/owner/google/oauth/start', { method: 'POST', body: { apps }, csrf: true, stage: 'google-oauth-start' }),
+      access: (action, apps) => request(appsWorker, '/v1/owner/google/apps/access', { method: 'POST', body: { action, apps }, csrf: true, stage: `google-app-${action}` }),
+    });
   }
 
   function bindConnectAppsAction(element, action) {
@@ -437,30 +612,112 @@
     return element;
   }
 
+  // This runs while app.js is evaluated, before unlock.js can begin its
+  // DOMContentLoaded flow. The assertion is passed directly to the existing
+  // one-time exchange and is never saved in browser storage.
+  function createStagingChatAuthorization({ root = globalThis, authConfig = root.JARVIS_AUTH_CONFIG || {}, stagingChatApi = root.JARVIS_STAGING_CHAT } = {}) {
+    const STAGING_AUTH_WORKER = 'https://jarvis-auth-staging.hlao-xiong.workers.dev';
+    let client = null; let exchangeInFlight = false; let renewalInFlight = null; let generation = 0;
+    let status = 'DISCONNECTED · COMPLETE COMPANION UNLOCK TO CONNECT';
+    try { client = stagingChatApi?.createClient({ relayUrl: authConfig.chatRelayUrl }); }
+    catch { status = 'DISCONNECTED · AUTHENTICATED STAGING CHAT IS NOT CONFIGURED'; }
+    const publish = (next) => {
+      status = next;
+      if (root.CustomEvent) root.dispatchEvent?.(new root.CustomEvent('jarvis-staging-chat-status', { detail: { status } }));
+    };
+    const clear = () => {
+      generation += 1; exchangeInFlight = false; client?.clear();
+      publish(client ? 'DISCONNECTED · COMPLETE COMPANION UNLOCK TO CONNECT' : 'DISCONNECTED · AUTHENTICATED STAGING CHAT IS NOT CONFIGURED');
+    };
+    root.addEventListener?.('jarvis-glasses-assertion', (event) => {
+      const detail = event?.detail || {};
+      // Replayed events cannot create another exchange. The relay still
+      // validates the signed assertion and enforces its one-time use.
+      if (!client || exchangeInFlight || client.ready) return;
+      const run = ++generation; exchangeInFlight = true;
+      publish('CONNECTING · VERIFYING COMPANION UNLOCK');
+      void client.exchange(detail.assertion, detail.expiresAt).then(() => {
+        if (run === generation && client.ready) publish('CONNECTED · AUTHORIZED STAGING CHAT');
+      }).catch((error) => {
+        if (run === generation) publish(error?.status === 409 ? 'DISCONNECTED · UNLOCK ASSERTION WAS ALREADY USED' : 'DISCONNECTED · COMPANION CHAT AUTHORIZATION FAILED');
+      }).finally(() => { if (run === generation) exchangeInFlight = false; });
+    });
+    root.document?.addEventListener?.('jarvis-session-locked', clear);
+    const ensureReady = async () => {
+      if (client?.ready) return true;
+      if (renewalInFlight) return renewalInFlight;
+      if (!client || authConfig.workerUrl !== STAGING_AUTH_WORKER || typeof root.fetch !== 'function') { publish('DISCONNECTED - AUTHENTICATED STAGING CHAT IS NOT CONFIGURED'); return false; }
+      const run = generation;
+      renewalInFlight = (async () => {
+        publish('CONNECTING - RESTORING OWNER SESSION');
+        let response;
+        try { response = await root.fetch(`${STAGING_AUTH_WORKER}/v1/hud/session/restore`, { method: 'POST', headers: { 'X-Jarvis-HUD': 'restore' }, credentials: 'include', mode: 'cors', cache: 'no-store', referrerPolicy: 'no-referrer' }); }
+        catch { if (run === generation) publish('DISCONNECTED - OWNER SESSION RESTORE UNAVAILABLE'); return false; }
+        const value = await response.json().catch(() => null);
+        if (!response.ok || value?.authorized !== true || typeof value.assertion !== 'string' || !Number.isSafeInteger(value.assertionExpiresAt)) { if (run === generation) publish(response.status === 401 ? 'DISCONNECTED - OWNER SESSION EXPIRED' : 'DISCONNECTED - OWNER SESSION RESTORE UNAVAILABLE'); return false; }
+        if (run !== generation || exchangeInFlight) return false;
+        exchangeInFlight = true;
+        try {
+          await client.exchange(value.assertion, value.assertionExpiresAt * 1000);
+          if (run !== generation || !client.ready) return false;
+          publish('CONNECTED - AUTHORIZED STAGING CHAT');
+          return true;
+        } catch { if (run === generation) publish('DISCONNECTED - COMPANION CHAT AUTHORIZATION FAILED'); return false; }
+        finally { if (run === generation) exchangeInFlight = false; }
+      })().finally(() => { renewalInFlight = null; });
+      return renewalInFlight;
+    };
+    return Object.freeze({ get client() { return client; }, get status() { return status; }, clear, ensureReady });
+  }
+
   function boot(document) {
     const outlet = document.querySelector('#hud-screen');
     if (!outlet) return null;
-    let hud; let token = ''; let expiresAt = 0; let messages = [];
-    let gateway = '';
-    try { const candidate = new URL(new URLSearchParams(globalThis.location?.search || '').get('gateway') || ''); if (candidate.protocol === 'https:' && !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(candidate.hostname)) gateway = candidate.origin; } catch {}
-    const request = async (path, body, authorization = '') => {
-      let response;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try { response = await globalThis.fetch(`${gateway}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}) }, body: JSON.stringify(body) }); }
-        catch (error) { if (attempt === 2) throw error; await new Promise((resolve) => setTimeout(resolve, 350 * (2 ** attempt))); continue; }
-        if (![502, 503, 504].includes(response.status) || attempt === 2) break;
-        await new Promise((resolve) => setTimeout(resolve, 350 * (2 ** attempt)));
-      }
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) { const error = new Error(data.error || 'Connection failed.'); error.status = response.status; throw error; }
-      return data;
-    };
+    let hud; const conversations = { glm: [], granite: [] }; const visibleTranscript = createVisibleTranscript(); const chatScrollPositions = { glm: 0, granite: 0 }; const conversationMemory = createConversationMemory(); let visibleConversation = 'glm'; let chatStatus = 'DISCONNECTED · COMPLETE COMPANION UNLOCK TO CONNECT'; let chatBusy = false; let pendingChatMessage = ''; let retryChatMessage = ''; let lastGoogleApp = ''; let lastGmailSubjects = []; let lastGoogleOperation = null; let lastGoogleStatusCheck = false; let chatRequestGeneration = 0; let lastChatTransport = { category: 'none', status: null };
+    const appendConversation = (model, ...entries) => { conversations[model].push(...entries); if (conversations[model].length > 12) conversations[model] = conversations[model].slice(-12); visibleTranscript.append(model, ...entries); };
+    const authConfig = globalThis.JARVIS_AUTH_CONFIG || {};
+    let stagingChat = null;
+    try { stagingChat = globalThis.JARVIS_STAGING_CHAT?.createClient({ relayUrl: authConfig.chatRelayUrl }); }
+    catch { chatStatus = 'DISCONNECTED · AUTHENTICATED STAGING CHAT IS NOT CONFIGURED'; }
+    if (!globalThis.JARVIS_STAGING_CHAT_AUTHORIZATION) globalThis.addEventListener?.('jarvis-glasses-assertion', (event) => {
+      const detail = event?.detail || {};
+      if (!stagingChat) return;
+      chatStatus = 'CONNECTING · VERIFYING COMPANION UNLOCK';
+      void stagingChat.exchange(detail.assertion, detail.expiresAt).then(() => {
+        chatStatus = 'CONNECTED · AUTHORIZED STAGING CHAT';
+      }).catch((error) => {
+        chatStatus = error?.status === 409 ? 'DISCONNECTED · UNLOCK ASSERTION WAS ALREADY USED' : 'DISCONNECTED · COMPANION CHAT AUTHORIZATION FAILED';
+      }).finally(() => { if (hud) render(hud.snapshot()); });
+    });
+    const chatAuthorization = globalThis.JARVIS_STAGING_CHAT_AUTHORIZATION || null;
+    if (chatAuthorization) {
+      stagingChat = chatAuthorization.client;
+      chatStatus = chatAuthorization.status;
+      globalThis.addEventListener?.('jarvis-staging-chat-status', (event) => { chatStatus = event?.detail?.status || chatStatus; if (hud) render(hud.snapshot()); });
+    }
     let youtubeBackend = '';
     try { youtubeBackend = normalizeBackendOrigin(globalThis.localStorage?.getItem('jarvis.youtube.backend-origin') || '') || DEFAULT_YOUTUBE_WORKER_ORIGIN; } catch { youtubeBackend = DEFAULT_YOUTUBE_WORKER_ORIGIN; }
     const youtube = createYouTubeClient({ backendOrigin: youtubeBackend });
     const relayConfig = globalThis.JARVIS_CONNECTORS_CONFIG || {};
     const googleConnectors = globalThis.jarvisGoogleConnectors?.createGoogleConnectorClient({ workerOrigin: relayConfig.workerOrigin, enabled: relayConfig.enabled === true });
     const phoneCompanionUrl = globalThis.jarvisGoogleConnectors?.normalizeCompanionUrl?.(relayConfig.phoneCompanionUrl) || '';
+    // Strict allowlist: this record deliberately never holds request URLs,
+    // cookies, credentials, provider data, or server error strings.
+    const ownerAppsDiagnostics = { hud: document.body?.dataset?.jarvisSession === 'authenticated' ? 'active' : 'unavailable', handoffIssuance: 'not-attempted', handoffRedemption: 'not-attempted', session: 'unavailable', googleStatus: 'not-attempted', lastStatus: 'none', category: 'none' };
+    const stagingDiagnostics = authConfig.hudOrigin === 'https://jarvis-hud-staging.hlao-xiong.workers.dev' && globalThis.location?.origin === authConfig.hudOrigin;
+    const updateOwnerAppsDiagnostic = ({ stage, state, status, category }) => {
+      // These fields describe the last *failure*. A successful recovery must
+      // not leave a prior revoked-session 401 displayed as current state.
+      if (state === 'attempted' && stage === 'handoff-issuance') { ownerAppsDiagnostics.lastStatus = 'none'; ownerAppsDiagnostics.category = 'none'; }
+      if ((state === 'failed' || state === 'provider-failure') && Number.isInteger(status)) ownerAppsDiagnostics.lastStatus = String(status);
+      if ((state === 'failed' || state === 'provider-failure') && typeof category === 'string') ownerAppsDiagnostics.category = category;
+      if (state === 'success' && stage === 'google-grant-status') { ownerAppsDiagnostics.lastStatus = 'none'; ownerAppsDiagnostics.category = 'none'; }
+      if (stage === 'handoff-issuance') ownerAppsDiagnostics.handoffIssuance = state;
+      if (stage === 'handoff-redemption') { ownerAppsDiagnostics.handoffRedemption = state; ownerAppsDiagnostics.session = state === 'success' ? 'active' : 'unavailable'; }
+      if (stage === 'google-grant-status') ownerAppsDiagnostics.googleStatus = state === 'success' ? 'loaded' : state === 'failed' ? 'unavailable' : 'not-attempted';
+    };
+    const ownerApps = authConfig.workerUrl && relayConfig.workerOrigin ? createOwnerAppsClient({ authWorker: authConfig.workerUrl, appsWorker: relayConfig.workerOrigin, onDiagnostic: updateOwnerAppsDiagnostic }) : null;
+    const ownerAppsState = { status: ownerApps ? 'Verifying your unlocked owner session…' : 'Google Apps owner authorization is not configured.', busy: false, ready: false, grantState: 'checking', selected: new Set(), connected: new Set(), disabled: new Set() };
     const googleConnectorState = { status: googleConnectors?.available() ? 'Not paired. Start a short-lived phone approval.' : 'Google Apps relay is not configured in this HUD release.', pairing: null, busy: false, result: '' };
     if (googleConnectors?.available()) {
       googleConnectorState.status = 'Restoring saved Google Apps approval…';
@@ -592,17 +849,122 @@
       }
       if (state.screen === 'chat') {
         outlet.append(make('p', 'eyebrow', 'JARVIS AI'), make('h1', 'detail-title', 'AI CHAT'));
-        const status = make('p', 'status', token && expiresAt > Date.now() ? 'AI GATEWAY: PAIRED · SESSION MEMORY ONLY' : 'AI GATEWAY: NOT PAIRED · OFFLINE');
-        const log = make('div', 'chat-log', ''); messages.slice(-4).forEach(({ role, text }) => log.append(make('p', `chat-message ${role}`, `${role === 'user' ? 'YOU' : 'JARVIS'}: ${text}`))); outlet.append(status, log);
-        const gatewayInput = document.createElement('input'); gatewayInput.type = 'url'; gatewayInput.placeholder = 'HTTPS GATEWAY URL'; gatewayInput.value = gateway; gatewayInput.setAttribute('aria-label', 'Secure AI gateway URL');
-        const codeInput = document.createElement('input'); codeInput.type = 'password'; codeInput.placeholder = 'ONE-TIME PAIRING CODE'; codeInput.setAttribute('aria-label', 'One-time pairing code');
-        const pair = make('button', 'action', 'PAIR SECURE AI'); pair.type = 'button'; pair.addEventListener('click', async () => { try { const candidate = new URL(gatewayInput.value); gateway = candidate.protocol === 'https:' ? candidate.origin : ''; } catch { gateway = ''; } if (!gateway) { status.textContent = 'PAIRING: USE A PUBLIC HTTPS GATEWAY URL.'; return; } try { pair.disabled = true; const data = await request('/v1/pair', { code: codeInput.value }); token = data.accessToken; expiresAt = Number(data.expiresAt) || 0; codeInput.value = ''; status.textContent = 'AI GATEWAY: PAIRED · ENTER A MESSAGE.'; } catch { token = ''; status.textContent = 'PAIRING FAILED. CHECK THE CODE OR GATEWAY.'; } finally { pair.disabled = false; } });
-        const prompt = document.createElement('input'); prompt.type = 'text'; prompt.placeholder = 'ASK JARVIS'; prompt.maxLength = 1000; prompt.setAttribute('aria-label', 'Message for JARVIS');
-        const send = make('button', 'action', 'SEND'); send.type = 'button'; send.addEventListener('click', async () => { if (!token || expiresAt <= Date.now()) { token = ''; status.textContent = 'SESSION EXPIRED. PAIR SECURE AI AGAIN.'; return; } const message = prompt.value.trim(); if (!message) return; messages.push({ role: 'user', text: message }); prompt.value = ''; status.textContent = 'JARVIS IS THINKING…'; send.disabled = true; try { const data = await request('/v1/chat', { message }, token); messages.push({ role: 'assistant', text: String(data.reply || '').slice(0, 2000) }); status.textContent = 'AI GATEWAY: PAIRED'; } catch (error) { if (error.status === 401) { token = ''; expiresAt = 0; status.textContent = 'SESSION EXPIRED. PAIR SECURE AI AGAIN.'; } else { status.textContent = 'AI TEMPORARILY UNAVAILABLE. SESSION KEPT; TRY AGAIN.'; } } finally { send.disabled = false; render(hud.snapshot()); } });
-        outlet.append(gatewayInput, codeInput, pair, prompt, send, make('p', 'copy', 'Focus a field to use Neural Band handwriting, dictation, or the on-screen keyboard. Pairing code and session token remain in memory only.'));
+        const status = make('p', 'status', chatStatus);
+        const log = make('div', 'chat-log', ''); log.tabIndex = 0; log.setAttribute('aria-label', 'Current unlocked chat transcript'); visibleTranscript.entries(visibleConversation).forEach(({ role, text, kind }) => log.append(make('p', `chat-message ${role}`, `${role === 'user' ? 'YOU' : kind === 'google' ? 'GOOGLE APPS' : 'JARVIS'}: ${text}`))); if (pendingChatMessage) log.append(make('p', 'chat-message user pending', `YOU: ${pendingChatMessage}`)); log.addEventListener('scroll', () => { chatScrollPositions[visibleConversation] = log.scrollTop; }); outlet.append(status, log); queueMicrotask(() => { log.scrollTop = chatScrollPositions[visibleConversation] || 0; });
+        const prompt = document.createElement('input'); prompt.type = 'text'; prompt.placeholder = 'ASK JARVIS'; prompt.maxLength = 1000; prompt.value = retryChatMessage; prompt.setAttribute('aria-label', 'Message for JARVIS');
+        const send = make('button', 'action', 'SEND'); send.type = 'button'; send.disabled = chatBusy || (!stagingChat?.ready && !chatAuthorization);
+        send.addEventListener('click', async () => {
+          const evaluation = send.dataset.evaluation === 'granite'; delete send.dataset.evaluation;
+          const pendingMessage = prompt.value.trim(); if (!pendingMessage || chatBusy) return;
+          const requestGeneration = ++chatRequestGeneration;
+          const currentRequest = () => requestGeneration === chatRequestGeneration;
+          const clearChatTransport = () => { lastChatTransport = { category: 'none', status: null }; };
+          const rememberChatTransport = (error) => { const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : null; const category = ['network', 'capability-rejected', 'origin-denied', 'capability-replayed', 'relay-unavailable', 'request-rejected', 'invalid-response'].includes(error?.category) ? error.category : 'unknown'; lastChatTransport = { category, status }; };
+          const statusCheck = !evaluation && (isGoogleStatusRequest(pendingMessage) || (lastGoogleStatusCheck && isGoogleStatusFollowUp(pendingMessage)));
+          if (!statusCheck && !stagingChat?.ready && chatAuthorization) {
+            chatBusy = true; chatStatus = 'CONNECTING - RESTORING OWNER SESSION'; render(hud.snapshot());
+            const restored = await chatAuthorization.ensureReady(); stagingChat = chatAuthorization.client; chatBusy = false;
+            if (!restored || !stagingChat?.ready) { render(hud.snapshot()); return; }
+          }
+          if (!statusCheck && !stagingChat?.ready) { chatStatus = 'DISCONNECTED · COMPLETE COMPANION UNLOCK TO CONNECT'; render(hud.snapshot()); return; }
+          const message = pendingMessage; const conversation = evaluation ? 'granite' : 'glm';
+          // Never send a Connected Apps result to the AI provider as history.
+          const history = boundedModelHistory([...conversations[conversation].filter((item) => item.kind !== 'google'), ...conversationMemory.safeModelContext()]); visibleConversation = conversation; chatBusy = true; pendingChatMessage = message; retryChatMessage = ''; prompt.value = ''; const startedAt = Date.now();
+          const directGoogleApp = googleAppHint(message);
+          const retryGoogleOperation = !evaluation && isGoogleRetryRequest(message) && usableGoogleRetry(lastGoogleOperation) ? lastGoogleOperation : null;
+          const gmailContextFollowUp = lastGoogleApp === 'gmail' && (isGoogleFollowUp(message) || matchesRecentGmailSubject(message, lastGmailSubjects));
+          const useGoogleApps = !evaluation && !statusCheck && (isGoogleReadRequest(message) || Boolean(retryGoogleOperation) || Boolean(lastGoogleApp && isGoogleFollowUp(message)) || gmailContextFollowUp);
+          const googleMessage = retryGoogleOperation ? retryGoogleOperation.message : directGoogleApp ? message : lastGoogleApp ? `${message} ${lastGoogleApp}` : message;
+          let activeGoogleOperation = retryGoogleOperation || (useGoogleApps && directGoogleApp ? { message, app: directGoogleApp, createdAt: Date.now() } : null);
+          if (statusCheck) chatStatus = 'CHECKING AUTHORIZED GOOGLE APPS…';
+          else if (useGoogleApps) chatStatus = googleConnectors?.paired() || (ownerApps && ownerAppsState.ready && ownerAppsState.connected.size) ? 'READING AUTHORIZED GOOGLE APPS…' : 'GOOGLE APPS APPROVAL REQUIRED · OPEN CONNECT APPS';
+          else chatStatus = evaluation ? 'TESTING GRANITE · JARVIS IS THINKING…' : 'SENDING GLM · JARVIS IS THINKING…'; render(hud.snapshot());
+          try {
+            if (!evaluation && (isConversationRecapRequest(message) || (conversationMemory.size && isConversationTimelineFollowUp(message)))) {
+              const reply = conversationMemory.recap(); appendConversation('glm', { role: 'user', text: message, kind: 'recap' }, { role: 'assistant', text: reply, kind: 'recap' });
+              clearChatTransport(); chatStatus = `SESSION RECAP · ${Date.now() - startedAt} MS`;
+            } else if (statusCheck) {
+              if (!ownerApps) throw new Error('Google Apps owner authorization is not configured.');
+              const grant = await ownerApps.status();
+              const reply = googleStatusReply(grant, directGoogleApp);
+              appendConversation('glm', { role: 'user', text: message, kind: 'google' }, { role: 'assistant', text: reply, kind: 'google' });
+              conversationMemory.recordGoogle(directGoogleApp || 'apps', grant.authorizationState || (grant.connected ? 'completed' : 'requested'));
+              lastGoogleStatusCheck = true;
+              clearChatTransport(); chatStatus = `GOOGLE APPS STATUS · ${Date.now() - startedAt} MS`;
+            } else if (useGoogleApps) {
+              const ownerReadReady = Boolean(ownerApps && ownerAppsState.ready && ownerAppsState.connected.size);
+              const googleResult = ownerReadReady ? await ownerApps.readCommand(googleMessage) : googleConnectors?.paired() ? await googleConnectors.runCommand(googleMessage) : 'Connect Google Apps from the JARVIS menu, then approve this glasses session on your phone before asking that read-only request.';
+              const reply = googleResult?.analysis && stagingChat?.analyzeDocument ? await stagingChat.analyzeDocument(googleResult.analysis.instruction, googleResult.analysis.text) : (typeof googleResult === 'string' ? googleResult : googleResult.content);
+              appendConversation('glm', { role: 'user', text: message, kind: 'google' }, { role: 'assistant', text: reply, kind: 'google' });
+              if (directGoogleApp) lastGoogleApp = directGoogleApp;
+              const routing = googleResult?.routing;
+              if (routing?.app === 'gmail' && Array.isArray(routing.subjects) && routing.subjects.length <= 10 && routing.subjects.every((subject) => typeof subject === 'string' && subject.length <= 180)) lastGmailSubjects = routing.subjects;
+              const resultStatus = typeof googleResult === 'string' ? 'completed' : String(googleResult?.status || 'completed');
+              lastGoogleOperation = resultStatus === 'temporary_error' && activeGoogleOperation ? activeGoogleOperation : null;
+              conversationMemory.recordGoogle(directGoogleApp || lastGoogleApp, googleResult?.analysis ? 'completed' : typeof googleResult === 'string' ? 'completed' : googleResult?.status);
+              clearChatTransport(); chatStatus = ownerReadReady || googleConnectors?.paired() ? `GOOGLE APPS · READ-ONLY · ${Date.now() - startedAt} MS` : 'GOOGLE APPS APPROVAL REQUIRED · NO GOOGLE REQUEST WAS SENT';
+            } else {
+              const reply = await stagingChat.send(message, history, { evaluation }); appendConversation(conversation, { role: 'user', text: message }, { role: 'assistant', text: reply }); conversationMemory.recordChat(message, reply, conversation); clearChatTransport(); chatStatus = evaluation ? `GRANITE 4.0 H MICRO · ${Date.now() - startedAt} MS · RETURN TO GLM` : `GLM-4.7-FLASH · ${Date.now() - startedAt} MS`;
+            }
+          }
+          catch (error) {
+            if (!currentRequest()) return;
+            rememberChatTransport(error);
+            if (activeGoogleOperation && error?.status !== 401 && error?.status !== 409) lastGoogleOperation = activeGoogleOperation;
+            if (error?.status === 401 || error?.status === 409) { conversations.glm = []; conversations.granite = []; visibleTranscript.clear(); chatScrollPositions.glm = 0; chatScrollPositions.granite = 0; conversationMemory.clear(); lastGoogleApp = ''; lastGmailSubjects = []; lastGoogleOperation = null; lastGoogleStatusCheck = false; }
+            if (error?.code === 'AI_EVALUATION_LIMIT') chatStatus = 'GRANITE LIMIT REACHED · NO ADDITIONAL GRANITE RESPONSE WAS RUN';
+            else if (error?.code === 'AI_USER_HOURLY_LIMIT') chatStatus = "JARVIS HOURLY AI LIMIT REACHED · TRY AGAIN AFTER THE NEXT UTC HOUR";
+            else if (error?.code === 'AI_USER_DAILY_LIMIT' || error?.code === 'AI_USER_BUDGET_EXHAUSTED') chatStatus = "JARVIS DAILY AI LIMIT REACHED · TRY AGAIN AFTER THE UTC DAILY RESET";
+            else if (error?.code === 'AI_ACCOUNT_BUDGET_EXHAUSTED') chatStatus = "JARVIS SHARED FREE AI BUDGET IS RESERVED · TRY AGAIN AFTER THE UTC DAILY RESET";
+            else if (error?.code === 'AI_QUOTA_EXHAUSTED') chatStatus = "CLOUDFLARE AI FREE ALLOWANCE IS EXHAUSTED · TRY AGAIN AFTER THE UTC DAILY RESET";
+            else if (error?.code === 'AI_CAPACITY') chatStatus = 'CLOUDFLARE AI IS TEMPORARILY BUSY · RETRY ONCE IN A MOMENT';
+            else if (error?.code === 'AI_TIMEOUT') chatStatus = 'ERROR · AI RESPONSE TIMED OUT · RETRY ONCE';
+            else if (error?.code === 'AI_REQUEST_REJECTED' || error?.code === 'AI_EXECUTION_FAILED' || error?.code === 'AI_RESPONSE_INVALID' || error?.code === 'REPLY_PERSIST_FAILED') chatStatus = 'AI RESPONSE COULD NOT BE COMPLETED · RETRY ONCE';
+            else if (error?.code === 'AI_LOCAL_QUOTA_EXHAUSTED') chatStatus = "JARVIS AI LIMIT REACHED · TRY AGAIN LATER";
+            else if (error?.status === 503 && /not enabled/i.test(error.message || '')) chatStatus = 'AI DISABLED · OWNER AUTHORIZATION REQUIRED';
+            else if (error?.status === 401 || error?.status === 409) chatStatus = 'DISCONNECTED · COMPLETE COMPANION UNLOCK AGAIN';
+            else if (error?.status === 403 || error?.category === 'origin-denied') chatStatus = 'CHAT REQUEST DENIED BY STAGING POLICY · RELOAD, THEN RETRY';
+            else chatStatus = statusCheck ? 'GOOGLE APPS STATUS COULD NOT BE VERIFIED · UNLOCK OR RECONNECT, THEN RETRY' : useGoogleApps ? 'GOOGLE APPS READ COULD NOT BE COMPLETED · RETRY WHEN READY' : /conversation context is (?:invalid|too large)/i.test(error?.message || '') ? 'CHAT CONTEXT WAS RESET SAFELY · RETRY YOUR MESSAGE' : /chat expired|could not reach authenticated staging chat/i.test(error?.message || '') ? 'CHAT CONNECTION EXPIRED OR UNAVAILABLE · UNLOCK OR RETRY' : error?.message?.includes('timed out') ? 'ERROR · AI RESPONSE TIMED OUT · RETRY ONCE' : error?.category === 'invalid-response' ? 'CHAT RESPONSE WAS INVALID · RETRY ONCE' : 'ERROR · AUTHENTICATED CHAT IS TEMPORARILY UNAVAILABLE';
+            retryChatMessage = message;
+          } finally { if (currentRequest()) { pendingChatMessage = ''; chatBusy = false; render(hud.snapshot()); } }
+        });
+        const granite = make('button', 'action', 'TEST GRANITE · 2 REQUEST MAX'); granite.type = 'button'; granite.disabled = !stagingChat?.ready || chatBusy; granite.hidden = !stagingChat?.ready; granite.addEventListener('click', () => { send.dataset.evaluation = 'granite'; send.click(); });
+        const returnToGlm = make('button', 'action', 'RETURN TO GLM'); returnToGlm.type = 'button'; returnToGlm.disabled = chatBusy; returnToGlm.addEventListener('click', () => { visibleConversation = 'glm'; chatStatus = stagingChat?.ready ? 'GLM-4.7-FLASH · CONNECTED · AUTHORIZED STAGING CHAT' : chatStatus; render(hud.snapshot()); });
+        outlet.append(prompt, send, granite, returnToGlm, make('p', 'copy', 'GLM and Granite keep separate in-memory conversation histories. TEST GRANITE is owner-only, uses a fixed server model, and never accepts model selection.'));
         const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
       }
       if (state.screen === 'connect-apps') {
+        if (ownerApps) {
+          const names = { gmail: 'Gmail', 'google-calendar': 'Google Calendar', 'google-contacts': 'Google Contacts', 'google-drive': 'Google Drive', 'google-docs': 'Google Docs', 'google-sheets': 'Google Sheets', 'google-tasks': 'Google Tasks' };
+          const status = make('p', 'status', ownerAppsState.status); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+          outlet.append(make('h1', '', 'CONNECT APPS'), status, make('p', 'copy', 'Select the Google Apps JARVIS may access. Existing connections remain active unless you explicitly revoke them elsewhere.'));
+          if (stagingDiagnostics) {
+            const build = document.querySelector?.('[data-hud-build-version]')?.dataset?.buildId || 'unknown';
+            const safeLines = () => [
+              `HUD authentication: ${ownerAppsDiagnostics.hud}`,
+              `Handoff issuance: ${ownerAppsDiagnostics.handoffIssuance}`,
+              `Handoff redemption: ${ownerAppsDiagnostics.handoffRedemption}`,
+              `Connected Apps session: ${ownerAppsDiagnostics.session}`,
+              `Google authorization status: ${ownerAppsDiagnostics.googleStatus}`,
+              `AI Chat transport: ${lastChatTransport.category}${lastChatTransport.status ? ` · HTTP ${lastChatTransport.status}` : ''}`,
+              `Last failing HTTP status: ${ownerAppsDiagnostics.lastStatus}`,
+              `Sanitized error category: ${ownerAppsDiagnostics.category}`,
+              `HUD build: ${build}`,
+            ];
+            const diagnostics = make('p', 'copy', safeLines().join('\n')); diagnostics.setAttribute('aria-label', 'Safe staging authorization diagnostics'); outlet.append(diagnostics);
+            const copy = make('button', 'action', 'COPY SAFE DIAGNOSTICS'); copy.type = 'button'; copy.dataset.connectorsFocus = 'true'; bindConnectAppsAction(copy, async () => { const report = `JARVIS CONNECT APPS STAGING DIAGNOSTICS\n${safeLines().join('\n')}`; try { await globalThis.navigator?.clipboard?.writeText(report); ownerAppsState.status = 'Safe diagnostics copied.'; } catch { ownerAppsState.status = 'Safe diagnostics could not be copied in this browser.'; } render(hud.snapshot()); }); outlet.append(copy);
+          }
+          const list = document.createElement('div'); list.className = 'hud-app-selection';
+          const appStateLabel = (id) => ownerAppsState.disabled.has(id) ? 'DISABLED IN JARVIS' : ownerAppsState.connected.has(id) ? 'CONNECTED' : ownerAppsState.grantState === 'checking' ? 'CHECKING CONNECTION' : ownerAppsState.grantState === 'unavailable' ? 'UNABLE TO VERIFY' : ownerAppsState.grantState === 'reconnect-required' ? 'RECONNECT REQUIRED' : 'AUTHORIZATION NEEDED';
+          Object.entries(names).forEach(([id, name]) => { const label = document.createElement('label'); label.className = 'copy hud-app-choice'; const box = document.createElement('input'); box.type = 'checkbox'; box.checked = ownerAppsState.selected.has(id); box.disabled = ownerAppsState.busy; box.dataset.connectorsFocus = 'true'; box.setAttribute('aria-label', `${name} selection`); box.addEventListener('change', () => { if (box.checked) ownerAppsState.selected.add(id); else ownerAppsState.selected.delete(id); render(hud.snapshot()); }); label.append(box, document.createTextNode(` ${name} · ${appStateLabel(id)}`)); list.append(label); }); outlet.append(list);
+          const selectAll = make('button', 'action', 'SELECT ALL'); selectAll.type = 'button'; selectAll.disabled = ownerAppsState.busy; selectAll.dataset.connectorsFocus = 'true'; bindConnectAppsAction(selectAll, () => { ownerAppsState.selected = new Set(Object.keys(names)); render(hud.snapshot()); });
+          const clear = make('button', 'action', 'CLEAR SELECTION'); clear.type = 'button'; clear.disabled = ownerAppsState.busy; clear.dataset.connectorsFocus = 'true'; bindConnectAppsAction(clear, () => { ownerAppsState.selected.clear(); render(hud.snapshot()); });
+          const connect = make('button', 'action', ownerAppsState.busy ? 'PLEASE WAIT' : 'CONNECT SELECTED APPS'); connect.type = 'button'; connect.disabled = ownerAppsState.busy || !ownerAppsState.selected.size; connect.dataset.connectorsFocus = 'true'; bindConnectAppsAction(connect, () => { if (!ownerAppsState.ready) { void authorizeOwnerApps(); return; } void (async () => { const selected = [...ownerAppsState.selected], disabled = selected.filter((app) => ownerAppsState.disabled.has(app)); const needed = selected.filter((app) => !ownerAppsState.connected.has(app)); ownerAppsState.busy = true; try { if (disabled.length) { const result = await ownerApps.access('enable', disabled); ownerAppsState.disabled = new Set(result.disabledApps || []); } if (!needed.length) { ownerAppsState.status = disabled.length ? 'Selected Google Apps were re-enabled in JARVIS.' : 'Selected Google Apps are already connected.'; ownerAppsState.selected.clear(); return; } ownerAppsState.status = 'Requesting Google permission for selected apps…'; render(hud.snapshot()); const result = await ownerApps.connect(needed); if (typeof result.authorizationUrl === 'string') globalThis.location.assign(result.authorizationUrl); else throw new Error('Google authorization could not start.'); } catch (error) { ownerAppsState.status = error?.status === 401 ? 'Your owner session expired. Unlock JARVIS again.' : 'Could not update selected Google Apps.'; } finally { ownerAppsState.busy = false; render(hud.snapshot()); } })(); });
+          const disconnect = make('button', 'action', 'DISCONNECT SELECTED APPS'); disconnect.type = 'button'; disconnect.disabled = ownerAppsState.busy || !ownerAppsState.selected.size; disconnect.dataset.connectorsFocus = 'true'; bindConnectAppsAction(disconnect, () => { if (!ownerAppsState.ready) { void authorizeOwnerApps(); return; } const apps = [...ownerAppsState.selected].filter((app) => ownerAppsState.connected.has(app) && !ownerAppsState.disabled.has(app)); if (!apps.length) { ownerAppsState.status = 'No selected connected Google Apps can be disconnected.'; render(hud.snapshot()); return; } const labels = apps.map((app) => names[app]).join(', '); if (!globalThis.confirm?.(`Disconnect ${labels} from JARVIS? Google account permission is not revoked; only JARVIS access to these apps will be disabled.`)) return; void (async () => { ownerAppsState.busy = true; ownerAppsState.status = 'Disabling selected Google Apps in JARVIS…'; render(hud.snapshot()); try { const result = await ownerApps.access('disable', apps); ownerAppsState.disabled = new Set(result.disabledApps || []); ownerAppsState.selected.clear(); ownerAppsState.status = 'Selected Google Apps are disabled in JARVIS. Google account permission remains unchanged.'; } catch (error) { ownerAppsState.status = error?.status === 401 ? 'Your owner session expired. Unlock JARVIS again.' : 'Could not disconnect selected Google Apps.'; } finally { ownerAppsState.busy = false; render(hud.snapshot()); } })(); });
+          outlet.append(selectAll, clear, connect, disconnect);
+          if (!ownerAppsState.ready) { const retry = make('button', 'action', ownerAppsState.busy ? 'AUTHORIZING…' : 'RETRY AUTHORIZATION'); retry.type = 'button'; retry.disabled = ownerAppsState.busy; retry.dataset.connectorsFocus = 'true'; bindConnectAppsAction(retry, () => { void authorizeOwnerApps(); }); outlet.append(retry); }
+          const back = make('button', 'action', 'BACK TO JARVIS'); back.type = 'button'; back.dataset.connectorsFocus = 'true'; back.addEventListener('click', () => hud.back()); outlet.append(back); return;
+        }
         const connectorStatus = make('p', 'status', googleConnectorState.status); connectorStatus.setAttribute('role', 'status'); connectorStatus.setAttribute('aria-live', 'polite');
         outlet.append(make('h1', '', 'GOOGLE APPS'), connectorStatus, make('p', 'copy', 'Google grants remain on the private JARVIS backend. Glasses approval renews short-lived read-only access and expires after 30 days.'));
         if(googleConnectors?.available()&&!googleConnectors.paired()&&!googleConnectorState.busy&&!googleConnectorState.restoring){const restore=make('button','action','RESTORE SAVED APPROVAL');restore.type='button';restore.dataset.connectorsFocus='true';bindConnectAppsAction(restore,()=>{void googleAppsActions.restore();});outlet.append(restore);}
@@ -625,6 +987,7 @@
           }
         } else if(googleConnectors?.paired()) {
           outlet.append(make('p','copy',`Connected: ${googleConnectors.apps.join(', ')}. Approval expires after 30 days.`));
+          const testAll = make('button', 'action', googleConnectorState.busy ? 'TESTING GOOGLE APPS…' : 'TEST ALL GOOGLE APPS'); testAll.type = 'button'; testAll.disabled = googleConnectorState.busy; testAll.dataset.connectorsFocus = 'true'; bindConnectAppsAction(testAll, () => { void googleAppsActions.testAllApps(); }); outlet.append(testAll, make('p', 'copy', 'Runs minimal read-only checks. Only PASS, FAIL, or NO DATA is shown; no Google content is displayed.'));
           const form=document.createElement('form');form.className='hud-youtube-search';const input=document.createElement('input');input.type='text';input.maxLength=1200;input.placeholder='Ask about Gmail, Calendar, Contacts, Drive, Docs, Sheets, or Tasks';input.setAttribute('aria-label','Google Apps command');input.dataset.connectorsFocus='true';input.dataset.googleCommand='true';const run=make('button','action','ASK JARVIS');run.type='submit';run.dataset.connectorsFocus='true';run.disabled=googleConnectorState.busy;form.addEventListener('submit',event=>{event.preventDefault();const command=input.value.trim();if(!command||googleConnectorState.busy)return;googleConnectorState.restoreCommandFocus=true;void googleAppsActions.runCommand(command);});form.append(input,run);outlet.append(form);if(googleConnectorState.restoreCommandFocus){googleConnectorState.restoreCommandFocus=false;queueMicrotask(()=>input.focus?.());}if(googleConnectorState.result){const result=make('pre','copy',googleConnectorState.result);result.setAttribute('aria-label','Google Apps response');outlet.append(result);}const reconnect=make('button','action','CLEAR SESSION');reconnect.type='button';reconnect.dataset.connectorsFocus='true';bindConnectAppsAction(reconnect,()=>googleAppsActions.clear());outlet.append(reconnect);
         }
         const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.dataset.connectorsFocus = 'true'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
@@ -742,7 +1105,27 @@
       const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); backButton.focus();
     };
     hud = createHud({ render });
+    document.addEventListener?.('jarvis-session-locked', () => {
+      chatRequestGeneration += 1; chatBusy = false; lastChatTransport = { category: 'none', status: null }; conversations.glm = []; conversations.granite = []; visibleTranscript.clear(); chatScrollPositions.glm = 0; chatScrollPositions.granite = 0; conversationMemory.clear(); pendingChatMessage = ''; retryChatMessage = ''; lastGoogleApp = ''; lastGmailSubjects = []; lastGoogleOperation = null; lastGoogleStatusCheck = false; visibleConversation = 'glm';
+    });
     const googleAppsActions = createGoogleAppsActions({ state: googleConnectorState, connector: googleConnectors, hud, render });
+    const authorizeOwnerApps = async () => {
+      if (!ownerApps || ownerAppsState.busy) return;
+      ownerAppsState.busy = true; ownerAppsState.ready = false; ownerAppsState.grantState = 'checking'; ownerAppsState.status = 'Verifying your unlocked owner session…'; render(hud.snapshot());
+      try { await ownerApps.authorize(); const grant = await ownerApps.status(); ownerAppsDiagnostics.hud = 'active'; ownerAppsState.connected = new Set(grant.apps || []); ownerAppsState.disabled = new Set(grant.disabledApps || []); ownerAppsState.grantState = grant.reconnectRequired === true ? 'reconnect-required' : grant.connected ? 'verified' : 'missing'; ownerAppsState.status = grant.reconnectRequired === true ? 'A previous Google authorization needs reconnection.' : grant.connected ? 'Owner session verified. Choose apps to add or update.' : 'Owner session verified. Choose apps to connect.'; ownerAppsState.ready = true; }
+      catch (error) { ownerAppsState.grantState = 'unavailable'; ownerAppsDiagnostics.hud = error?.status === 401 ? 'unavailable' : ownerAppsDiagnostics.hud; ownerAppsState.status = error?.status === 401 ? 'Unlock JARVIS with your iPhone to connect apps.' : 'Owner authorization is temporarily unavailable. Retry authorization.'; }
+      finally { ownerAppsState.busy = false; if (hud) render(hud.snapshot()); }
+    };
+    if (ownerApps) void authorizeOwnerApps();
+    // A LOCK invalidates the Auth session that backs the Connected Apps
+    // cookie. Once Face ID creates a new Auth session, exchange a fresh
+    // one-time handoff and reload the existing encrypted Google grant. This
+    // never renews or reconnects OAuth by itself.
+    document.addEventListener?.('jarvis-session-locked', () => {
+      ownerAppsState.ready = false; ownerAppsState.grantState = 'checking'; ownerAppsState.connected = new Set(); ownerAppsState.disabled = new Set(); ownerAppsState.status = 'Owner session locked. Unlock again to restore Connected Apps.';
+      ownerAppsDiagnostics.session = 'unavailable'; ownerAppsDiagnostics.googleStatus = 'not-attempted'; ownerAppsDiagnostics.lastStatus = 'none'; ownerAppsDiagnostics.category = 'none';
+    });
+    document.addEventListener?.('jarvis-session-unlocked', () => { if (ownerApps) void authorizeOwnerApps(); });
     const restoreYoutubeSession = async () => {
       const result = await youtube.restore();
       youtubeState.sessionReady = true;
@@ -783,6 +1166,9 @@
   }
 
   function shouldWaitForSession(authConfig, sessionState) { return authConfig?.enabled === true && sessionState !== 'unlocked'; }
+  // Kept only in memory for the life of this document. This listener exists
+  // before the separate unlock event can cause HUD boot.
+  globalThis.JARVIS_STAGING_CHAT_AUTHORIZATION = createStagingChatAuthorization();
   if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
     registerHudUpdates(globalThis.navigator, globalThis, document);
     if (shouldWaitForSession(globalThis.JARVIS_AUTH_CONFIG, document.body?.dataset?.jarvisSession)) {
@@ -791,5 +1177,5 @@
     }
     boot(document);
   }, { once: true });
-  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, bindConnectAppsAction, boot };
+  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, isGoogleReadRequest, isGoogleStatusRequest, isGoogleStatusFollowUp, isGoogleRetryRequest, usableGoogleRetry, googleStatusReply, googleAppHint, isGoogleFollowUp, matchesRecentGmailSubject, isConversationRecapRequest, isConversationTimelineFollowUp, createConversationMemory, boundedModelHistory, createVisibleTranscript, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction, createStagingChatAuthorization, boot };
 }));

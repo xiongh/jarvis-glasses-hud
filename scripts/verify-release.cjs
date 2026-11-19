@@ -18,6 +18,8 @@ function verifyReleaseDirectory({ root, expectedBuildId }) {
   auditPublication(absolute);
   const html = fs.readFileSync(path.join(absolute, 'index.html'), 'utf8');
   if (html.includes('__JARVIS_BUILD_ID__') || !html.includes(`data-build-id="${expectedBuildId}"`)) throw new Error('Visible HUD build ID did not match the release.');
+  const serviceWorker = fs.readFileSync(path.join(absolute, 'service-worker.js'), 'utf8');
+  if (!serviceWorker.includes(`const BUILD_ID = '${expectedBuildId}';`)) throw new Error('Service-worker cache build ID did not match the release.');
   if (health.schema !== 1 || health.status !== 'ok' || health.app !== 'JARVIS HUD' || health.buildId !== expectedBuildId || health.manifestSha256 !== sha256(manifestText)) throw new Error('Release health metadata did not match the staged manifest.');
   verifyManifest(manifest, absolute);
   return { buildId: manifest.buildId, manifestSha256: health.manifestSha256 };

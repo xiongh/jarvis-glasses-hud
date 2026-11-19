@@ -1,0 +1,36 @@
+name: Deploy shared JARVIS HUD to Cloudflare staging
+
+on:
+  push:
+    branches: [staging]
+    paths:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarvis-hud-cloudflare-staging
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # This Environment holds the existing token and required reviewers.
+    # The Worker name and URL are staging-only; GitHub Pages is never touched.
+    environment: cloudflare-staging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Verify shared HUD release behavior
+        run: |
+          node scripts/audit-publication.cjs .
+          node --test test/releases.test.js test/service-worker-lifecycle.test.js test/connect-apps-navigation.test.js test/connectors.test.js test/google-apps.test.js test/staging-apps-connect.test.js test/staging-chat.test.js test/staging-config.test.js test/unlock-poll.test.js
+          node scripts/deploy-unified-staging.cjs --source .
+      - name: Deploy and verify Cloudflare staging release
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/deploy-unified-staging.cjs --source . --deploy

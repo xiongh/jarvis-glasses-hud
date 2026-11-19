@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#090b10" />
+    <meta name="color-scheme" content="dark" />
+    <title>JARVIS Google Apps Test</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="phone-unlock-page">
+    <main class="phone-unlock-card">
+      <p class="eyebrow">JARVIS · STAGING</p>
+      <h1>Google Apps test</h1>
+      <p>This limited page uses only the existing paired-device authorization stored in this browser. It does not use Face ID, start pairing, request Google consent, or expose Google content.</p>
+      <button id="test-all-google-apps" class="action" type="button">RESTORE PAIRED AUTHORIZATION</button>
+      <pre id="google-apps-result" class="copy" aria-live="polite" hidden></pre>
+      <p id="google-apps-status" role="status" aria-live="polite">Restoring the existing paired-device authorization…</p>
+      <p>No Google data is changed. This page accepts only fixed PASS, FAIL, NO DATA, or NOT TESTED status lines.</p>
+    </main>
+    <script src="./connectors-config.js?staging-google-test=1"></script>
+    <script src="./connectors.js?staging-google-test=1"></script>
+    <script src="./google-apps.js?staging-google-test=1"></script>
+  </body>
+</html>

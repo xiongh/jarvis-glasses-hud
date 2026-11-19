@@ -31,7 +31,9 @@ function auditPublication(root) {
   if (companion) {
     let url;
     try { url = new URL(companion); } catch { throw new Error('Phone companion URL is invalid.'); }
-    if (url.protocol !== 'https:' || !url.hostname.endsWith('.ts.net') || url.pathname !== '/connect-apps.html' || url.search || url.hash || url.username || url.password) throw new Error('Phone companion URL must be the expected HTTPS Tailscale route.');
+    const publicCompanion = url.hostname.endsWith('.ts.net') && url.pathname === '/connect-apps.html';
+    const stagingCompanion = url.hostname === 'jarvis-hud-staging.hlao-xiong.workers.dev' && url.pathname === '/staging-apps-connect.html';
+    if (url.protocol !== 'https:' || (!publicCompanion && !stagingCompanion) || url.search || url.hash || url.username || url.password) throw new Error('Phone companion URL must be the expected HTTPS Tailscale route or isolated staging approval page.');
   }
   const auth = contents.get('auth-config.js') || '';
   const enabled = auth.match(/enabled:\s*(true|false)/)?.[1];

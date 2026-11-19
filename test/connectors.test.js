@@ -51,7 +51,36 @@ test('latest-email intent reaches the relay with an explicit count while Google 
   await client.restore();
   await assert.rejects(client.runCommand('Show my latest five emails'), /HTTP 503.*Relay unavailable/i);
   assert.equal(calls.filter((call) => call.url.endsWith('/v1/hud/commands')).length, 1);
-  assert.deepEqual(JSON.parse(calls.at(-1).options.body), { message: 'Show my latest five emails' });
+  const command = JSON.parse(calls.at(-1).options.body);
+  assert.equal(command.message, 'Show my latest five emails');
+  assert.match(command.commandId, /^[a-f0-9]{40}$/);
+});
+
+test('cloud-direct Google completion renders without legacy job polling', async () => {
+  const now = 3_000_000; const calls = [];
+  const client = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      if (String(url).endsWith('/v1/hud/renew')) return response(200, { deviceId: `hud_${'a'.repeat(32)}`, accessToken: 'b'.repeat(64), renewalToken: 'c'.repeat(64), expiresAt: now + 900_000, deviceExpiresAt: now + 30 * 86400000, apps: ['gmail'] });
+      if (String(url).endsWith('/v1/hud/commands')) return response(200, { status: 'complete', result: { content: 'Five latest messages' } });
+      throw new Error(`Unexpected relay route: ${url}`);
+    }, storage: { read: async () => ({ workerOrigin: 'https://relay.example.workers.dev', deviceId: `hud_${'a'.repeat(32)}`, accessToken: 'b'.repeat(64), expiresAt: now + 900_000, renewalToken: 'c'.repeat(64), deviceExpiresAt: now + 30 * 86400000, apps: ['gmail'] }), write: async () => {}, remove: async () => {} } });
+  await client.restore();
+  assert.equal(await client.runCommand('Show my latest five emails'), 'Five latest messages');
+  const commandCalls = calls.filter((call) => call.url.endsWith('/v1/hud/commands'));
+  assert.equal(commandCalls.length, 1);
+  assert.match(JSON.parse(commandCalls[0].options.body).commandId, /^[a-f0-9]{40}$/);
+  assert.equal(calls.some((call) => /\/v1\/hud\/commands\//.test(call.url)), false);
+});
+
+test('connectivity test is sent through the existing device-scoped command channel', async () => {
+  const now = 3_000_000; const calls = [];
+  const client = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
+    fetchImpl: async (url, options = {}) => { calls.push({ url: String(url), options }); if (String(url).endsWith('/v1/hud/renew')) return response(200, { deviceId: `hud_${'a'.repeat(32)}`, accessToken: 'b'.repeat(64), renewalToken: 'c'.repeat(64), expiresAt: now + 900_000, deviceExpiresAt: now + 30 * 86400000, apps: APPS }); if (String(url).endsWith('/v1/hud/commands')) return response(200, { status: 'complete', result: { content: 'Gmail: PASS\nDocs: NO DATA' } }); throw new Error('Unexpected relay route.'); },
+    storage: { read: async () => ({ workerOrigin: 'https://relay.example.workers.dev', deviceId: `hud_${'a'.repeat(32)}`, renewalToken: 'a'.repeat(64), deviceExpiresAt: now + 30 * 86400000 }), write: async () => {}, remove: async () => {} } });
+  await client.restore();
+  assert.equal(await client.runCommand('__JARVIS_GOOGLE_CONNECTIVITY_TEST_V1__'), 'Gmail: PASS\nDocs: NO DATA');
+  assert.equal(JSON.parse(calls.find((call) => call.url.endsWith('/v1/hud/commands')).options.body).message, '__JARVIS_GOOGLE_CONNECTIVITY_TEST_V1__');
 });
 
 test('pairing validates the opaque ID, eight-digit code, poll secret, and three-minute lifetime', async () => {
@@ -209,6 +238,6 @@ test('HUD shows a configured private companion link and keeps connector scripts 
   assert.match(worker, /'\.\/auth-config\.js', '\.\/unlock\.html', '\.\/unlock\.js'/);
   assert.match(worker, /caches\.open\(CACHE\).*cache\.match/);
   assert.doesNotMatch(worker, /caches\.match\(event\.request\)/);
-  assert.match(worker, /await self\.skipWaiting\(\)/, 'a complete verified cache activates without waiting for a hard refresh');
-  assert.match(worker, /filter\(\(key\) => key !== CACHE\)/, 'activation removes obsolete release caches after the new cache is complete');
+  assert.match(worker, /if \(event\.data\?\.type === 'ACTIVATE_UPDATE'\) event\.waitUntil\(self\.skipWaiting\(\)\)/, 'only the explicit reload action activates a waiting release');
+  assert.match(worker, /generationCaches\.slice\(-2\)/, 'the current complete release and one predecessor remain available');
 });
