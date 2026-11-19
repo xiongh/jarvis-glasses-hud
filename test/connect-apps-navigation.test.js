@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createHud, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction } = require('../app');
+const { createHud, navigationKey, bindHudKeyboard, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction } = require('../app');
 const { createGoogleConnectorClient } = require('../connectors');
 
 const makeAppsHud = () => {
@@ -65,6 +65,24 @@ test('arrow navigation wraps focus without changing HUD screen; Escape uses the 
   const escape = makeEvent('Escape');
   handleConnectAppsKey(escape, { hud, outlet, document });
   assert.equal(hud.snapshot().screen, 'menu');
+});
+
+test('Neural Band-compatible sparse key events are normalized for navigation', () => {
+  assert.equal(navigationKey({ key: 'Unidentified', code: 'ArrowRight' }), 'ArrowRight');
+  assert.equal(navigationKey({ key: 'Unidentified', keyCode: 13 }), 'Enter');
+  const hud = createHud(); hud.select();
+  hud.handleKey({ key: 'Unidentified', which: 40, preventDefault() {} });
+  assert.equal(hud.snapshot().selected, 1);
+});
+
+test('HUD keyboard binding captures non-bubbling Neural Band key events before focused controls consume them', () => {
+  let listener = null; let capture = null;
+  const target = { addEventListener(type, callback, option) { assert.equal(type, 'keydown'); listener = callback; capture = option; }, removeEventListener() {} };
+  const received = []; const detach = bindHudKeyboard(target, (event) => received.push(navigationKey(event)));
+  listener({ key: 'ArrowDown' });
+  detach();
+  assert.equal(capture, true);
+  assert.deepEqual(received, ['ArrowDown']);
 });
 
 test('phone approval button starts a Worker pairing and rerenders only the Google Apps screen', async () => {

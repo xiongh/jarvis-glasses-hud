@@ -12,6 +12,25 @@
   const GOOGLE_READ_TERMS = /\b(?:what(?:'s|s| is)?|show|find|search|look up|list|read|open|summari[sz]e|summeri[sz]e|upcoming|latest|newest|unfinished|completed|first|last|next)\b/i;
   const DRIVE_SELECTION_TERMS = /\b(?:doc(?:ument)?|file|item|pdf|sheet|spreadsheet)\s*(?:number\s*)?\d{1,2}\b|\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:doc(?:ument)?|file|item|pdf|sheet|spreadsheet)\b/i;
 
+  // Meta's Web App runtime maps Neural Band gestures to the normal D-pad
+  // key set. Capture is intentional: the device browser can target a focused
+  // control with a non-bubbling event, which a document bubble listener misses.
+  // `code` and legacy numeric values keep this compatible with sparse events
+  // from embedded WebViews without widening the accepted input.
+  function navigationKey(event) {
+    const key = String(event?.key || '');
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' '].includes(key)) return key;
+    const code = String(event?.code || '');
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', 'Space'].includes(code)) return code === 'Space' ? ' ' : code;
+    return ({ 8: 'Backspace', 13: 'Enter', 27: 'Escape', 32: ' ', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown' })[Number(event?.keyCode || event?.which)] || '';
+  }
+
+  function bindHudKeyboard(target, listener) {
+    if (!target?.addEventListener || typeof listener !== 'function') return () => {};
+    target.addEventListener('keydown', listener, true);
+    return () => target.removeEventListener?.('keydown', listener, true);
+  }
+
   // This is a routing hint only. The Connected Apps Worker performs the
   // authoritative, owner-bound app allowlist and exposes read-only adapters.
   function isGoogleReadRequest(value) {
@@ -442,17 +461,18 @@
   }
 
   function handleUpdateControlsKey(event, documentObject = globalThis.document) {
+    const key = navigationKey(event);
     const group = event.target?.closest?.('[data-update-controls]');
     if (!group) return false;
     const controls = [...(group.querySelectorAll?.('[data-update-focus]:not(:disabled):not([hidden])') || [])];
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
       if (!controls.length) return false;
       event.preventDefault();
       const index = controls.indexOf(documentObject.activeElement);
-      controls[(index + (['ArrowUp', 'ArrowLeft'].includes(event.key) ? controls.length - 1 : 1)) % controls.length].focus();
+      controls[(index + (['ArrowUp', 'ArrowLeft'].includes(key) ? controls.length - 1 : 1)) % controls.length].focus();
       return true;
     }
-    if ((event.key === 'Enter' || event.key === ' ') && controls.includes(documentObject.activeElement)) {
+    if ((key === 'Enter' || key === ' ') && controls.includes(documentObject.activeElement)) {
       event.preventDefault();
       documentObject.activeElement.click();
       return true;
@@ -480,7 +500,7 @@
       return commit();
     };
     const handleKey = (event) => {
-      const key = event?.key;
+      const key = navigationKey(event);
       if (key === 'ArrowUp' || key === 'ArrowLeft') { event?.preventDefault?.(); return move(-1); }
       if (key === 'ArrowDown' || key === 'ArrowRight') { event?.preventDefault?.(); return move(1); }
       if (key === 'Enter' || key === ' ') { event?.preventDefault?.(); return select(); }
@@ -491,20 +511,21 @@
   }
 
   function handleConnectAppsKey(event, { hud, outlet, document }) {
+    const key = navigationKey(event);
     if (hud.snapshot().screen !== 'connect-apps') return false;
-    if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) && event.key !== 'Escape') return true;
-    if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); hud.back(); return true; }
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) && key !== 'Escape') return true;
+    if (key === 'Escape' || key === 'Backspace') { event.preventDefault(); hud.back(); return true; }
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
       event.preventDefault();
       const controls = [...outlet.querySelectorAll('[data-connectors-focus]:not(:disabled)')];
       if (controls.length) {
         const current = controls.indexOf(document.activeElement);
-        const direction = ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1;
+        const direction = ['ArrowUp', 'ArrowLeft'].includes(key) ? -1 : 1;
         controls[(current + direction + controls.length) % controls.length].focus();
       }
       return true;
     }
-    if (event.key === 'Enter' || event.key === ' ') {
+    if (key === 'Enter' || key === ' ') {
       // Consume activation keys even when focus was lost during a rerender.
       // Falling through to hud.handleKey() selects the current screen and exits.
       event.preventDefault();
@@ -1138,25 +1159,27 @@
       else { youtubeState.status = result.persistent ? 'Connected. Loading subscriptions when YouTube opens…' : 'Connected for this session. Persistent storage is unavailable in this Web App.'; youtubeState.initialLoadPending = true; }
       render(hud.snapshot());
     };
-    document.addEventListener('keydown', (event) => {
+    const handleHudKeydown = (event) => {
+      const key = navigationKey(event);
       if (handleUpdateControlsKey(event, document)) return;
       if (handleConnectAppsKey(event, { hud, outlet, document })) return;
       if (hud.snapshot().screen === 'youtube') {
-        if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); if (youtubeState.current) { leaveYoutubePlayer(); render(hud.snapshot()); } else hud.back(); return; }
+        if (key === 'Escape' || key === 'Backspace') { event.preventDefault(); if (youtubeState.current) { leaveYoutubePlayer(); render(hud.snapshot()); } else hud.back(); return; }
         if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName)) return;
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
           event.preventDefault();
           const controls = [...outlet.querySelectorAll('[data-youtube-focus]:not(:disabled)')];
           if (!controls.length) return;
           const current = controls.indexOf(document.activeElement);
-          const direction = ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1;
+          const direction = ['ArrowUp', 'ArrowLeft'].includes(key) ? -1 : 1;
           controls[(current + direction + controls.length) % controls.length].focus(); return;
         }
-        if ((event.key === 'Enter' || event.key === ' ') && document.activeElement?.matches?.('[data-youtube-focus]:not(input)')) { event.preventDefault(); document.activeElement.click(); return; }
+        if ((key === 'Enter' || key === ' ') && document.activeElement?.matches?.('[data-youtube-focus]:not(input)')) { event.preventDefault(); document.activeElement.click(); return; }
       }
-      if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) && event.key !== 'Escape') return;
+      if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) && key !== 'Escape') return;
       hud.handleKey(event);
-    });
+    };
+    bindHudKeyboard(globalThis.addEventListener ? globalThis : document, handleHudKeydown);
     globalThis.addEventListener?.('popstate', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); });
     hud.render();
     void googleAppsActions.restore();
@@ -1177,5 +1200,5 @@
     }
     boot(document);
   }, { once: true });
-  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, isGoogleReadRequest, isGoogleStatusRequest, isGoogleStatusFollowUp, isGoogleRetryRequest, usableGoogleRetry, googleStatusReply, googleAppHint, isGoogleFollowUp, matchesRecentGmailSubject, isConversationRecapRequest, isConversationTimelineFollowUp, createConversationMemory, boundedModelHistory, createVisibleTranscript, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction, createStagingChatAuthorization, boot };
+  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, navigationKey, bindHudKeyboard, isGoogleReadRequest, isGoogleStatusRequest, isGoogleStatusFollowUp, isGoogleRetryRequest, usableGoogleRetry, googleStatusReply, googleAppHint, isGoogleFollowUp, matchesRecentGmailSubject, isConversationRecapRequest, isConversationTimelineFollowUp, createConversationMemory, boundedModelHistory, createVisibleTranscript, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction, createStagingChatAuthorization, boot };
 }));
