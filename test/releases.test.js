@@ -72,6 +72,24 @@ test('deployment verification retries a transient post-deploy fetch failure and 
   assert.match(retries[0].reason, /fetch failed/);
 });
 
+test('deployment verification retries until a newly published manifest matches its health generation', async () => {
+  const buildId = 'd'.repeat(40);
+  const assets = Object.fromEntries(HASHED_FILES.map((file) => [file, Buffer.from(`asset:${file}`)]));
+  const manifest = { schema: 1, app: 'JARVIS HUD', buildId, files: Object.fromEntries(HASHED_FILES.map((file) => [file, require('node:crypto').createHash('sha256').update(assets[file]).digest('hex')])) };
+  const manifestText = `${JSON.stringify(manifest)}\n`;
+  const health = { schema: 1, status: 'ok', app: 'JARVIS HUD', buildId, manifestSha256: require('node:crypto').createHash('sha256').update(manifestText).digest('hex') };
+  let manifestRequests = 0; const waits = [];
+  const fetchImpl = async (url) => {
+    const file = new URL(url).pathname.slice(1);
+    if (file === 'health.json') return new Response(JSON.stringify(health));
+    if (file === 'release-manifest.json') return new Response(manifestRequests++ === 0 ? '{"schema":1,"buildId":"stale"}\n' : manifestText);
+    return new Response(assets[file]);
+  };
+  const verified = await verifyDeployment({ baseUrl: 'https://staging.example/', expectedBuildId: buildId, fetchImpl, attempts: 2, initialDelayMs: 2, maxDelayMs: 2, wait: async (ms) => { waits.push(ms); } });
+  assert.equal(verified.buildId, buildId);
+  assert.deepEqual(waits, [2]);
+});
+
 test('resilient deployment fetch falls back to HTTPS curl only after native fetch fails', async () => {
   let fallbacks = 0; let curlCalls = 0;
   const request = createResilientFetch({

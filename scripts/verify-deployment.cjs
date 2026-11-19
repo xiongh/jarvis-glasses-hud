@@ -66,7 +66,7 @@ async function verifyDeploymentOnce({ baseUrl, expectedBuildId, fetchImpl, timeo
   const { value: health } = await checkedJson(fetchImpl, urlFor('health.json'), 'Deployment health document', timeoutMs);
   if (health.status !== 'ok' || health.app !== 'JARVIS HUD' || health.buildId !== expectedBuildId || !/^[a-f0-9]{64}$/.test(health.manifestSha256 || '')) throw new DeploymentVerificationError('Deployment health document has not reached the expected JARVIS release.', { retryable: true });
   const { text: manifestText, value: manifest } = await checkedJson(fetchImpl, urlFor('release-manifest.json'), 'Deployment release manifest', timeoutMs);
-  if (sha256(manifestText) !== health.manifestSha256 || manifest.buildId !== expectedBuildId) throw new DeploymentVerificationError('Deployment release manifest did not match health metadata.');
+  if (sha256(manifestText) !== health.manifestSha256 || manifest.buildId !== expectedBuildId) throw new DeploymentVerificationError('Deployment release manifest has not reached the health document generation.', { retryable: true });
   validateReleaseManifest(manifest, expectedBuildId);
   for (const file of HASHED_FILES) {
     const signal = timeoutMs > 0 && typeof globalThis.AbortSignal?.timeout === 'function' ? globalThis.AbortSignal.timeout(timeoutMs) : undefined;
