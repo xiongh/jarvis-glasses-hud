@@ -28,7 +28,7 @@ jobs:
       - name: Verify shared HUD release behavior
         run: |
           node scripts/audit-publication.cjs .
-          node --test test/releases.test.js test/service-worker-lifecycle.test.js test/connect-apps-navigation.test.js test/connectors.test.js test/google-apps.test.js test/staging-apps-connect.test.js test/staging-chat.test.js test/staging-config.test.js test/unlock-poll.test.js
+          node --test test/releases.test.js test/service-worker-lifecycle.test.js test/connect-apps-navigation.test.js test/connectors.test.js test/google-apps.test.js test/staging-apps-connect.test.js test/staging-chat.test.js test/staging-config.test.js test/unlock-poll.test.js test/input-diagnostics.test.js
           node scripts/deploy-unified-staging.cjs --source .
       - name: Deploy and verify Cloudflare staging release
         env:
