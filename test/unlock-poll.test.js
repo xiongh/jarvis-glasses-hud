@@ -9,14 +9,15 @@ const json = (status, body, headers = {}) => ({ ok: status >= 200 && status < 30
 
 function harness(responses, config = {}) {
   const timers = []; const events = []; const listeners = {};
-  const element = () => ({ hidden: false, disabled: false, textContent: '', addEventListener(type, listener) { this.listeners ||= {}; this.listeners[type] = listener; } });
-  const lock = element(), app = element(), status = element(), code = element(), retry = element(), faceId = element(), manualLock = element();
-  const documentObject = { body: { dataset: {} }, getElementById: (id) => ({ 'jarvis-session-lock': lock, 'jarvis-glasses-hud': app, 'lock-status': status, 'lock-code': code, 'lock-retry': retry, 'lock-face-id': faceId, 'hud-lock': manualLock }[id]), addEventListener(type, listener) { listeners[type] = listener; }, dispatchEvent(event) { events.push(event.type); } };
+  let documentObject;
+  const element = () => ({ hidden: false, disabled: false, textContent: '', clicks: 0, focus() { documentObject.activeElement = this; }, click() { this.clicks += 1; this.listeners?.click?.(); }, addEventListener(type, listener) { this.listeners ||= {}; this.listeners[type] = listener; } });
+  const lock = element(), app = element(), status = element(), code = element(), retry = element(), faceId = element(), phoneUnlock = element(), manualLock = element();
+  documentObject = { body: { dataset: {} }, activeElement: null, getElementById: (id) => ({ 'jarvis-session-lock': lock, 'jarvis-glasses-hud': app, 'lock-status': status, 'lock-code': code, 'lock-retry': retry, 'lock-face-id': faceId, 'lock-phone-unlock': phoneUnlock, 'hud-lock': manualLock }[id]), addEventListener(type, listener) { listeners[type] = listener; }, dispatchEvent(event) { events.push(event.type); } };
   const windowObject = { JARVIS_AUTH_CONFIG: { enabled: true, hudOrigin: 'https://jarvis-hud-staging.hlao-xiong.workers.dev', workerUrl: 'https://jarvis-auth-staging.hlao-xiong.workers.dev', ...config }, location: { origin: 'https://jarvis-hud-staging.hlao-xiong.workers.dev' }, Event: class { constructor(type) { this.type = type; } }, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } }, dispatchEvent(event) { events.push(event.type); } };
   const calls = [];
   const fetchImpl = async (url, options) => { calls.push({ url, options }); const next = responses.shift(); assert.ok(next, `unexpected request ${url}`); return next; };
   const controller = unlock.mountGlasses(documentObject, { windowObject, navigatorObject: { onLine: config.navigatorOnLine ?? true }, fetchImpl, now: () => 1_000, setTimer(handler, delay) { const timer = { delay, cleared: false, fired: false, handler: () => { timer.fired = true; handler(); } }; timers.push(timer); return timer; }, clearTimer(timer) { timer.cleared = true; } });
-  return { controller, timers, events, status, lock, app, retry, manualLock, calls };
+  return { controller, timers, events, listeners, documentObject, status, lock, app, retry, faceId, phoneUnlock, manualLock, calls };
 }
 
 test('companion polling stays below the Auth Worker window and stops after one successful unlock', async () => {
@@ -101,4 +102,22 @@ test('display runtimes with a false online hint still restore and create compani
   await new Promise(setImmediate);
   assert.match(companion.calls[0].url, /\/v1\/glasses\/unlock\/start$/);
   assert.equal(companion.status.textContent, 'Open the JARVIS Unlock page on your iPhone and enter this code.');
+});
+
+test('locked glasses route Neural Band arrows and Select across the companion unlock controls', async () => {
+  const h = harness([
+    json(201, { transactionId, pollSecret, code: '12345678', expiresAt: 1_100 }),
+    json(200, { unlocked: false, pending: true, expiresAt: 1_100 }),
+  ]);
+  await new Promise(setImmediate);
+  assert.equal(h.documentObject.activeElement, h.retry, 'companion unlock is initially focused');
+  const event = (key) => ({ key, target: { closest: () => null }, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } });
+  const up = event('ArrowUp'); h.listeners.keydown(up);
+  assert.equal(h.documentObject.activeElement, h.phoneUnlock);
+  assert.equal(up.prevented, true); assert.equal(up.stopped, true);
+  const select = event('Enter'); h.listeners.keydown(select);
+  assert.equal(h.phoneUnlock.clicks, 1);
+  assert.equal(select.prevented, true); assert.equal(select.stopped, true);
+  const down = event('ArrowDown'); h.listeners.keydown(down);
+  assert.equal(h.documentObject.activeElement, h.retry);
 });

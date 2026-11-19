@@ -80,7 +80,7 @@
   function mountGlasses(documentObject, { windowObject = globalThis.window, navigatorObject = globalThis.navigator, fetchImpl = globalThis.fetch, now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
     const lock = documentObject?.getElementById?.('jarvis-session-lock'); const app = documentObject?.getElementById?.('jarvis-glasses-hud');
     if (!lock || !app) return null;
-    const title = documentObject.getElementById('lock-title'); const status = documentObject.getElementById('lock-status'); const code = documentObject.getElementById('lock-code'); const retry = documentObject.getElementById('lock-retry'); const faceId = documentObject.getElementById('lock-face-id'); const manualLock = documentObject.getElementById('hud-lock'); const diagnostics = documentObject.getElementById('hud-auth-diagnostics');
+    const title = documentObject.getElementById('lock-title'); const status = documentObject.getElementById('lock-status'); const code = documentObject.getElementById('lock-code'); const retry = documentObject.getElementById('lock-retry'); const faceId = documentObject.getElementById('lock-face-id'); const phoneUnlock = documentObject.getElementById('lock-phone-unlock'); const manualLock = documentObject.getElementById('hud-lock'); const diagnostics = documentObject.getElementById('hud-auth-diagnostics');
     const worker = trustedWorker(windowObject.JARVIS_AUTH_CONFIG, windowObject.location);
     const POLL_INTERVAL_MS = 6_000; const POLL_BACKOFF_MIN_MS = 10_000; const POLL_BACKOFF_MAX_MS = 30_000;
     let timer = null; let expiryTimer = null; let expiry = 0; let generation = 0; let busy = false; let unlocked = false; let pollInFlight = false; let pollDelay = POLL_INTERVAL_MS; let restoreInFlight = null;
@@ -101,7 +101,7 @@
     };
     const diagnose = (changes) => { Object.assign(diagnosticState, changes); report(); };
     const setChecking = (message = 'Checking your secure JARVIS session…') => { unlocked = false; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'checking_session'; code.hidden = true; if (title) title.textContent = 'CHECKING SESSION'; say(message); };
-    const setLocked = (message) => { const wasUnlocked = unlocked; unlocked = false; expiry = 0; if (expiryTimer !== null) clearTimer(expiryTimer); expiryTimer = null; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'locked'; code.hidden = true; if (title) title.textContent = 'LOCKED'; if (message) say(message); if (wasUnlocked) documentObject.dispatchEvent(new windowObject.Event('jarvis-session-locked')); };
+    const setLocked = (message) => { const wasUnlocked = unlocked; unlocked = false; expiry = 0; if (expiryTimer !== null) clearTimer(expiryTimer); expiryTimer = null; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'locked'; code.hidden = true; if (title) title.textContent = 'LOCKED'; if (message) say(message); retry?.focus?.(); if (wasUnlocked) documentObject.dispatchEvent(new windowObject.Event('jarvis-session-locked')); };
     const unlock = (expiresAt) => { if (expiryTimer !== null) clearTimer(expiryTimer); unlocked = true; expiry = expiresAt * 1000; lock.hidden = true; app.inert = false; documentObject.body.dataset.jarvisSession = 'authenticated'; documentObject.dispatchEvent(new windowObject.Event('jarvis-session-unlocked')); expiryTimer = setTimer(() => { if (unlocked) setLocked('Your JARVIS session expired. Approve again on your iPhone.'); }, Math.max(0, expiry - now())); };
     const stop = () => { generation++; if (timer !== null) clearTimer(timer); timer = null; busy = false; pollDelay = POLL_INTERVAL_MS; };
     const schedulePoll = (id, secret, run, delay = POLL_INTERVAL_MS) => {
@@ -218,7 +218,33 @@
         setLocked(canceled ? 'Face ID or passkey authentication was canceled. Try again when ready.' : error?.message || 'Could not unlock with Face ID. Try again.');
       } finally { faceId.disabled = false; }
     });
-    documentObject.addEventListener('keydown', (event) => { if (!unlocked && !event.target?.closest?.('[data-update-controls]')) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
+    // The lock screen mounts before app.js and therefore needs its own D-pad
+    // focus routing. Previously this capture listener suppressed all keys,
+    // including the Arrow/Enter events the Neural Band sends, without moving
+    // focus to the companion-unlock controls.
+    const navigationKey = (event) => {
+      const key = String(event?.key || event?.code || '');
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', ' ', 'Space', 'Escape', 'Backspace'].includes(key)) return key === 'Space' ? ' ' : key;
+      return ({ 8: 'Backspace', 13: 'Enter', 27: 'Escape', 32: ' ', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown' })[Number(event?.keyCode || event?.which)] || '';
+    };
+    const lockControls = () => [faceId, phoneUnlock, retry].filter((control) => control && !control.hidden && !control.disabled);
+    documentObject.addEventListener('keydown', (event) => {
+      if (unlocked || event.target?.closest?.('[data-update-controls]')) return;
+      const key = navigationKey(event); const controls = lockControls();
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key) && controls.length) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        const current = controls.indexOf(documentObject.activeElement);
+        const delta = ['ArrowUp', 'ArrowLeft'].includes(key) ? -1 : 1;
+        controls[(current + delta + controls.length) % controls.length].focus?.();
+        return;
+      }
+      if ((key === 'Enter' || key === ' ') && controls.length) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        (controls.includes(documentObject.activeElement) ? documentObject.activeElement : controls[0]).click?.();
+        return;
+      }
+      event.preventDefault(); event.stopImmediatePropagation();
+    }, true);
     documentObject.addEventListener('visibilitychange', () => {
       // Do not render LOCKED during the only period where the session is
       // unknown. The restore result is the authority for that transition.
