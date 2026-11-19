@@ -8,7 +8,7 @@ const { test } = require('node:test');
 const hud = require('../app');
 const { HASHED_FILES, PUBLIC_FILES, prepareRelease } = require('../scripts/prepare-release.cjs');
 const { verifyReleaseDirectory } = require('../scripts/verify-release.cjs');
-const { verifyDeployment } = require('../scripts/verify-deployment.cjs');
+const { createResilientFetch, verifyDeployment } = require('../scripts/verify-deployment.cjs');
 const { auditPublication } = require('../scripts/audit-publication.cjs');
 const unlock = require('../unlock');
 
@@ -70,6 +70,18 @@ test('deployment verification retries a transient post-deploy fetch failure and 
   assert.deepEqual(waits, [3]);
   assert.equal(retries.length, 1);
   assert.match(retries[0].reason, /fetch failed/);
+});
+
+test('resilient deployment fetch falls back to HTTPS curl only after native fetch fails', async () => {
+  let fallbacks = 0; let curlCalls = 0;
+  const request = createResilientFetch({
+    fetchImpl: async () => { throw new TypeError('fetch failed'); },
+    curlImpl: async (url, options) => { curlCalls += 1; assert.equal(url, 'https://staging.example/health.json'); assert.equal(options.headers.Accept, 'application/json'); return new Response('{"ok":true}'); },
+    onFallback: () => { fallbacks += 1; },
+  });
+  assert.equal(await (await request('https://staging.example/health.json', { headers: { Accept: 'application/json' } })).text(), '{"ok":true}');
+  assert.equal(fallbacks, 1);
+  assert.equal(curlCalls, 1);
 });
 
 test('deployment verification fails closed on a published asset hash mismatch without retrying', async () => {

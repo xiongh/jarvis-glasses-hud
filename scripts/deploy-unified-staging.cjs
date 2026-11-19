@@ -40,6 +40,7 @@ async function main(args = process.argv.slice(2)) {
         baseUrl: STAGING_URL,
         expectedBuildId: buildId,
         onRetry: ({ attempt, attempts, delayMs, reason }) => process.stderr.write(`[staging verification] attempt ${attempt}/${attempts} did not observe the new release; retrying in ${delayMs}ms (${reason})\n`),
+        onTransportFallback: () => process.stderr.write('[staging verification] native HTTPS fetch failed; using the HTTPS curl fallback.\n'),
       });
     }
     process.stdout.write(`${JSON.stringify({ buildId, artifact: output, cloudflareStaging: STAGING_URL, deployed: deploy, pages: 'BLOCKED_NO_STAGING_TARGET' })}\n`);
