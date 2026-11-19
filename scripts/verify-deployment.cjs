@@ -2,6 +2,23 @@
 
 const { HASHED_FILES, sha256 } = require('./prepare-release.cjs');
 
+class DeploymentVerificationError extends Error {
+  constructor(message, { retryable = false } = {}) {
+    super(message);
+    this.name = 'DeploymentVerificationError';
+    this.retryable = retryable;
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const retryableStatus = (status) => status === 404 || status === 408 || status === 425 || status === 429 || status >= 500;
+const retryDelay = (attempt, initialDelayMs, maxDelayMs) => Math.min(maxDelayMs, initialDelayMs * (2 ** (attempt - 1)));
+
+function publicReason(error) {
+  const message = String(error?.message || 'request failed').replace(/[\r\n\t]+/g, ' ').slice(0, 240);
+  return `${error?.name || 'Error'}: ${message}`;
+}
+
 function validateReleaseManifest(manifest, expectedBuildId) {
   if (!manifest || manifest.schema !== 1 || manifest.app !== 'JARVIS HUD' || manifest.buildId !== expectedBuildId || !manifest.files || typeof manifest.files !== 'object') throw new Error('Deployment release manifest has an invalid identity or structure.');
   const actualFiles = Object.keys(manifest.files).sort();
@@ -10,30 +27,51 @@ function validateReleaseManifest(manifest, expectedBuildId) {
   return true;
 }
 
-async function checkedJson(fetchImpl, url) {
-  const response = await fetchImpl(url, { cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`Health check failed (${response.status}) for ${url}`);
+async function checkedJson(fetchImpl, url, label, timeoutMs) {
+  const signal = timeoutMs > 0 && typeof globalThis.AbortSignal?.timeout === 'function' ? globalThis.AbortSignal.timeout(timeoutMs) : undefined;
+  const response = await fetchImpl(url, { cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json' }, signal });
+  if (!response.ok) throw new DeploymentVerificationError(`${label} returned HTTP ${response.status}.`, { retryable: retryableStatus(response.status) });
   const text = await response.text();
-  try { return { text, value: JSON.parse(text) }; } catch { throw new Error(`Expected JSON from ${url}`); }
+  try { return { text, value: JSON.parse(text) }; } catch { throw new DeploymentVerificationError(`${label} did not return JSON.`, { retryable: true }); }
 }
-async function verifyDeployment({ baseUrl, expectedBuildId, fetchImpl = fetch }) {
+
+async function verifyDeploymentOnce({ baseUrl, expectedBuildId, fetchImpl, timeoutMs }) {
   const base = new URL(baseUrl); if (base.protocol !== 'https:') throw new Error('Deployment health checks require HTTPS.');
   const urlFor = (file) => new URL(file, base).href;
-  const { value: health } = await checkedJson(fetchImpl, urlFor('health.json'));
-  if (health.status !== 'ok' || health.app !== 'JARVIS HUD' || health.buildId !== expectedBuildId || !/^[a-f0-9]{64}$/.test(health.manifestSha256 || '')) throw new Error('Deployment health document did not identify the expected JARVIS release.');
-  const { text: manifestText, value: manifest } = await checkedJson(fetchImpl, urlFor('release-manifest.json'));
-  if (sha256(manifestText) !== health.manifestSha256 || manifest.buildId !== expectedBuildId) throw new Error('Deployment release manifest did not match health metadata.');
+  const { value: health } = await checkedJson(fetchImpl, urlFor('health.json'), 'Deployment health document', timeoutMs);
+  if (health.status !== 'ok' || health.app !== 'JARVIS HUD' || health.buildId !== expectedBuildId || !/^[a-f0-9]{64}$/.test(health.manifestSha256 || '')) throw new DeploymentVerificationError('Deployment health document has not reached the expected JARVIS release.', { retryable: true });
+  const { text: manifestText, value: manifest } = await checkedJson(fetchImpl, urlFor('release-manifest.json'), 'Deployment release manifest', timeoutMs);
+  if (sha256(manifestText) !== health.manifestSha256 || manifest.buildId !== expectedBuildId) throw new DeploymentVerificationError('Deployment release manifest did not match health metadata.');
   validateReleaseManifest(manifest, expectedBuildId);
   for (const file of HASHED_FILES) {
-    const response = await fetchImpl(urlFor(file), { cache: 'no-store', redirect: 'error' });
-    if (!response.ok) throw new Error(`Release file check failed (${response.status}) for ${file}`);
+    const signal = timeoutMs > 0 && typeof globalThis.AbortSignal?.timeout === 'function' ? globalThis.AbortSignal.timeout(timeoutMs) : undefined;
+    const response = await fetchImpl(urlFor(file), { cache: 'no-store', redirect: 'error', signal });
+    if (!response.ok) throw new DeploymentVerificationError(`Release file ${file} returned HTTP ${response.status}.`, { retryable: retryableStatus(response.status) });
     const actual = sha256(Buffer.from(await response.arrayBuffer()));
-    if (actual !== manifest.files[file]) throw new Error(`Published SHA-256 mismatch for ${file}.`);
+    if (actual !== manifest.files[file]) throw new DeploymentVerificationError(`Published SHA-256 mismatch for ${file}.`);
   }
   return { buildId: manifest.buildId, manifestSha256: health.manifestSha256 };
+}
+
+async function verifyDeployment({ baseUrl, expectedBuildId, fetchImpl = fetch, attempts = 6, initialDelayMs = 1000, maxDelayMs = 8000, timeoutMs = 10000, wait = sleep, onRetry = () => {} }) {
+  if (!Number.isInteger(attempts) || attempts < 1) throw new Error('Verification attempts must be a positive integer.');
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await verifyDeploymentOnce({ baseUrl, expectedBuildId, fetchImpl, timeoutMs });
+    } catch (error) {
+      lastError = error;
+      const retryable = !(error instanceof DeploymentVerificationError) || error.retryable;
+      if (!retryable || attempt === attempts) break;
+      const delayMs = retryDelay(attempt, initialDelayMs, maxDelayMs);
+      onRetry({ attempt, attempts, delayMs, reason: publicReason(error) });
+      await wait(delayMs);
+    }
+  }
+  throw new Error(`Deployment verification failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${publicReason(lastError)}`);
 }
 if (require.main === module) {
   const args = process.argv.slice(2); const read = (name) => args[args.indexOf(name) + 1];
   verifyDeployment({ baseUrl: read('--url'), expectedBuildId: read('--build') }).then((value) => process.stdout.write(`${JSON.stringify(value)}\n`)).catch((error) => { process.stderr.write(`${error.message}\n`); process.exit(1); });
 }
-module.exports = { validateReleaseManifest, verifyDeployment };
+module.exports = { DeploymentVerificationError, validateReleaseManifest, verifyDeployment, verifyDeploymentOnce };

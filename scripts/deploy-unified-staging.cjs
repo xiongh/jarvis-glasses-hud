@@ -36,7 +36,11 @@ async function main(args = process.argv.slice(2)) {
       // Existing account authorization is consumed by Wrangler; this script
       // neither reads nor creates credentials or secrets.
       run(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['--yes', 'wrangler@4.159.0', 'deploy', '--config', config, '--assets', output], root);
-      await verifyDeployment({ baseUrl: STAGING_URL, expectedBuildId: buildId });
+      await verifyDeployment({
+        baseUrl: STAGING_URL,
+        expectedBuildId: buildId,
+        onRetry: ({ attempt, attempts, delayMs, reason }) => process.stderr.write(`[staging verification] attempt ${attempt}/${attempts} did not observe the new release; retrying in ${delayMs}ms (${reason})\n`),
+      });
     }
     process.stdout.write(`${JSON.stringify({ buildId, artifact: output, cloudflareStaging: STAGING_URL, deployed: deploy, pages: 'BLOCKED_NO_STAGING_TARGET' })}\n`);
   } finally {

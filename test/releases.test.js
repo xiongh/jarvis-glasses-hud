@@ -6,8 +6,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 const hud = require('../app');
-const { PUBLIC_FILES, prepareRelease } = require('../scripts/prepare-release.cjs');
+const { HASHED_FILES, PUBLIC_FILES, prepareRelease } = require('../scripts/prepare-release.cjs');
 const { verifyReleaseDirectory } = require('../scripts/verify-release.cjs');
+const { verifyDeployment } = require('../scripts/verify-deployment.cjs');
 const { auditPublication } = require('../scripts/audit-publication.cjs');
 const unlock = require('../unlock');
 
@@ -45,6 +46,45 @@ test('release verification rejects a service-worker cache generation that differ
   const worker = path.join(output, 'service-worker.js');
   fs.writeFileSync(worker, fs.readFileSync(worker, 'utf8').replace(buildId, 'd'.repeat(40)));
   assert.throws(() => verifyReleaseDirectory({ root: output, expectedBuildId: buildId }), /Service-worker cache build ID/);
+});
+
+test('deployment verification retries a transient post-deploy fetch failure and verifies every published asset', async () => {
+  const buildId = 'e'.repeat(40);
+  const assets = Object.fromEntries(HASHED_FILES.map((file) => [file, Buffer.from(`asset:${file}`)]));
+  const manifest = { schema: 1, app: 'JARVIS HUD', buildId, files: Object.fromEntries(HASHED_FILES.map((file) => [file, require('node:crypto').createHash('sha256').update(assets[file]).digest('hex')])) };
+  const manifestText = `${JSON.stringify(manifest)}\n`;
+  const health = { schema: 1, status: 'ok', app: 'JARVIS HUD', buildId, manifestSha256: require('node:crypto').createHash('sha256').update(manifestText).digest('hex') };
+  let healthRequests = 0; const waits = []; const retries = [];
+  const fetchImpl = async (url) => {
+    const file = new URL(url).pathname.slice(1);
+    if (file === 'health.json') {
+      healthRequests += 1;
+      if (healthRequests === 1) throw new TypeError('fetch failed');
+      return new Response(JSON.stringify(health));
+    }
+    if (file === 'release-manifest.json') return new Response(manifestText);
+    return new Response(assets[file]);
+  };
+  const verified = await verifyDeployment({ baseUrl: 'https://staging.example/', expectedBuildId: buildId, fetchImpl, attempts: 2, initialDelayMs: 3, maxDelayMs: 3, wait: async (ms) => { waits.push(ms); }, onRetry: (info) => retries.push(info) });
+  assert.equal(verified.buildId, buildId);
+  assert.deepEqual(waits, [3]);
+  assert.equal(retries.length, 1);
+  assert.match(retries[0].reason, /fetch failed/);
+});
+
+test('deployment verification fails closed on a published asset hash mismatch without retrying', async () => {
+  const buildId = 'f'.repeat(40); let retries = 0;
+  const manifest = { schema: 1, app: 'JARVIS HUD', buildId, files: Object.fromEntries(HASHED_FILES.map((file) => [file, 'a'.repeat(64)])) };
+  const manifestText = `${JSON.stringify(manifest)}\n`;
+  const health = { schema: 1, status: 'ok', app: 'JARVIS HUD', buildId, manifestSha256: require('node:crypto').createHash('sha256').update(manifestText).digest('hex') };
+  const fetchImpl = async (url) => {
+    const file = new URL(url).pathname.slice(1);
+    if (file === 'health.json') return new Response(JSON.stringify(health));
+    if (file === 'release-manifest.json') return new Response(manifestText);
+    return new Response('wrong bytes');
+  };
+  await assert.rejects(() => verifyDeployment({ baseUrl: 'https://staging.example/', expectedBuildId: buildId, fetchImpl, attempts: 3, wait: async () => { throw new Error('should not wait'); }, onRetry: () => { retries += 1; } }), /SHA-256 mismatch/);
+  assert.equal(retries, 0);
 });
 
 test('public publication audit rejects credential patterns and passes the intended public routes', (t) => {
