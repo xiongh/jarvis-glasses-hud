@@ -2,7 +2,12 @@ const BUILD_ID = 'local';
 const CACHE_PREFIX = 'jarvis-glasses-hud-v5-';
 const ALL_CACHE_PREFIX = 'jarvis-glasses-hud-';
 const CACHE = `${CACHE_PREFIX}${BUILD_ID}`;
-const ASSETS = ['./', './index.html', './google-apps.html', './google-apps.js', './styles.css', './youtube-player.js', './auth-config.js', './unlock.html', './unlock.js', './connectors-config.js', './connectors.js', './app.js', './input-diagnostics.js', './staging-apps-connect.html', './staging-apps-connect.js?connections=20261120-1', './staging-passkey.html', './staging-passkey.js', './manifest.webmanifest', './staging-connections.webmanifest', './jarvis-connections-icon.svg', './release-manifest.json', './health.json'];
+// Connection management is security-sensitive and must never be served from a
+// predecessor release. In particular, an old Connections document can retain
+// controls whose handlers have since been removed. The rest of the HUD remains
+// a complete, explicitly activated release cache.
+const CONNECTIONS_PATHS = new Set(['/staging-apps-connect', '/staging-apps-connect.html', '/staging-apps-connect.js']);
+const ASSETS = ['./', './index.html', './google-apps.html', './google-apps.js', './styles.css', './youtube-player.js', './auth-config.js', './unlock.html', './unlock.js', './connectors-config.js', './connectors.js', './app.js', './input-diagnostics.js', './staging-passkey.html', './staging-passkey.js', './manifest.webmanifest', './staging-connections.webmanifest', './jarvis-connections-icon.svg', './release-manifest.json', './health.json'];
 self.addEventListener('install', (event) => event.waitUntil((async () => {
   const cache = await caches.open(CACHE);
   try {
@@ -30,7 +35,15 @@ self.addEventListener('activate', (event) => event.waitUntil((async () => {
   for (const client of clients) client.postMessage({ type: 'JARVIS_HUD_UPDATE_ACTIVATED', buildId: BUILD_ID });
 })()));
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET' || new URL(event.request.url).origin !== self.location.origin) return;
+  const url = new URL(event.request.url);
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  // Do not fall back to an old connection-management page while offline: it
+  // could present stale authorization choices. A live network response is
+  // required for both routes and their controller.
+  if (CONNECTIONS_PATHS.has(url.pathname)) {
+    event.respondWith(fetch(new Request(event.request, { cache: 'no-store' })));
+    return;
+  }
   // Never mix a predecessor cache with this release's app and connector code.
   event.respondWith(caches.open(CACHE).then((cache) => cache.match(event.request)).then((cached) => cached || fetch(event.request)));
 });
