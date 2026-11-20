@@ -16,9 +16,10 @@ const PRODUCTION_PAGES_ORIGIN = 'https://xiongh.github.io';
 function value(args, name) { const i = args.indexOf(name); return i < 0 ? '' : args[i + 1] || ''; }
 function run(file, args, cwd) { execFileSync(file, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' }); }
 
-async function main(args = process.argv.slice(2)) {
+async function main(args = process.argv.slice(2), { environment = process.env } = {}) {
   const root = path.resolve(value(args, '--source') || process.cwd());
   const deploy = args.includes('--deploy');
+  if (deploy && environment.GITHUB_ACTIONS !== 'true') throw new Error('Refusing staging deployment outside the approved GitHub Actions workflow.');
   const pagesUrl = value(args, '--pages-staging-url');
   if (pagesUrl) {
     const parsed = new URL(pagesUrl);

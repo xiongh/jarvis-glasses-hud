@@ -13,10 +13,13 @@ const { PUBLIC_FILES, prepareRelease } = require('./prepare-release.cjs');
 function stagingBuildId(source) {
   // Preserve the dirty worktree while assigning each staging artifact a
   // deterministic content identity instead of the ambiguous "local" label.
+  // GitHub Actions checks out LF while a Windows worktree can use CRLF. The
+  // release identity must describe the same tracked artifact on either host.
   const hash = crypto.createHash('sha1'); const staging = path.join(source, 'staging');
   for (const file of PUBLIC_FILES) {
     const from = ['auth-config.js', 'connectors-config.js'].includes(file) ? path.join(staging, file) : path.join(source, file);
-    hash.update(file).update('\0').update(fs.readFileSync(from)).update('\0');
+    const normalized = fs.readFileSync(from, 'utf8').replace(/\r\n/g, '\n');
+    hash.update(file).update('\0').update(normalized, 'utf8').update('\0');
   }
   return hash.digest('hex');
 }

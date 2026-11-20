@@ -10,6 +10,7 @@ const { HASHED_FILES, PUBLIC_FILES, prepareRelease } = require('../scripts/prepa
 const { verifyReleaseDirectory } = require('../scripts/verify-release.cjs');
 const { createResilientFetch, verifyDeployment } = require('../scripts/verify-deployment.cjs');
 const { auditPublication } = require('../scripts/audit-publication.cjs');
+const { main: deployStaging } = require('../scripts/deploy-unified-staging.cjs');
 const unlock = require('../unlock');
 
 const root = path.resolve(__dirname, '..');
@@ -46,6 +47,10 @@ test('release verification rejects a service-worker cache generation that differ
   const worker = path.join(output, 'service-worker.js');
   fs.writeFileSync(worker, fs.readFileSync(worker, 'utf8').replace(buildId, 'd'.repeat(40)));
   assert.throws(() => verifyReleaseDirectory({ root: output, expectedBuildId: buildId }), /Service-worker cache build ID/);
+});
+
+test('staging deployment is restricted to the approved GitHub Actions workflow', async () => {
+  await assert.rejects(() => deployStaging(['--source', root, '--deploy'], { environment: {} }), /approved GitHub Actions workflow/);
 });
 
 test('deployment verification retries a transient post-deploy fetch failure and verifies every published asset', async () => {

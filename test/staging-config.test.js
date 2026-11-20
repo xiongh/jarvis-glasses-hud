@@ -60,3 +60,15 @@ test('staging packaging fingerprints the isolated artifact when no commit revisi
   const expected = stagingBuildId(source); const result = prepareStagingRelease({ source, output, buildId: 'auto' });
   assert.match(expected, /^[a-f0-9]{40}$/); assert.equal(result.manifest.buildId, expected);
 });
+
+test('staging packaging identity is stable across Windows and CI line endings', (t) => {
+  const source = path.join(__dirname, '..'); const copy = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'jarvis-staging-line-endings-'));
+  t.after(() => fs.rmSync(copy, { recursive: true, force: true }));
+  const { PUBLIC_FILES } = require('../scripts/prepare-release.cjs');
+  for (const file of PUBLIC_FILES) {
+    const target = path.join(copy, file); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(path.join(source, file), target);
+  }
+  fs.mkdirSync(path.join(copy, 'staging')); for (const file of ['auth-config.js', 'connectors-config.js']) fs.copyFileSync(path.join(source, 'staging', file), path.join(copy, 'staging', file));
+  const app = fs.readFileSync(path.join(copy, 'app.js'), 'utf8'); fs.writeFileSync(path.join(copy, 'app.js'), app.replace(/\r?\n/g, '\r\n'));
+  assert.equal(stagingBuildId(copy), stagingBuildId(source));
+});
