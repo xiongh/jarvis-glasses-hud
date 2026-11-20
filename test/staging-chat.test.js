@@ -112,14 +112,15 @@ test('HUD routes only natural read-only Google Apps requests through the approve
   assert.equal(matchesRecentGmailSubject('unrelated conversation', ['CoinTracker weekly report']), false);
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.match(source, /googleResult\?\.analysis \? 'completed'/);
-  assert.match(source, /ownerReadReady \? await ownerApps\.readCommand\(googleMessage\) : googleConnectors\?\.paired\(\) \? await googleConnectors\.runCommand\(googleMessage\)/);
+  assert.match(source, /googleConnectors\?\.paired\(\) \? await googleConnectors\.runCommand\(googleMessage\)/);
   assert.match(source, /filter\(\(item\) => item\.kind !== 'google'\)/);
-  assert.match(source, /GOOGLE APPS APPROVAL REQUIRED · NO GOOGLE REQUEST WAS SENT/);
+  assert.match(source, /GOOGLE APPS NOT CONNECTED · NO GOOGLE REQUEST WAS SENT/);
+  assert.match(source, /Provider login and grant management remain phone-only/);
   assert.match(source, /let lastGoogleApp = ''/);
   assert.match(source, /lastGoogleApp = ''/);
 });
 
-test('HUD routes Google capability questions through the authenticated status check, never GLM or a provider read', () => {
+test('HUD routes Google capability questions through the paired device capability, never an owner-session read', () => {
   assert.equal(isGoogleStatusRequest('are you connected to my google drive'), true);
   assert.equal(isGoogleStatusRequest('can you see my gmail now'), true);
   assert.equal(isGoogleStatusRequest('but the connection show that all my google applications are already connected'), true);
@@ -131,7 +132,8 @@ test('HUD routes Google capability questions through the authenticated status ch
   assert.match(googleStatusReply({ connected: false, authorizationState: 'revoked', reconnectRequired: true }, 'drive'), /revoked.*reconnected/i);
   assert.match(googleStatusReply({ connected: false, authorizationState: 'disconnected' }, 'drive'), /not connected/i);
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert.match(source, /ownerApps\.status\(\)/);
+  assert.match(source, /runCommand\('__JARVIS_GOOGLE_CONNECTIVITY_TEST_V1__'\)/);
+  assert.doesNotMatch(source, /if \(ownerApps\) void authorizeOwnerApps\(\)/);
   assert.match(source, /CHECKING AUTHORIZED GOOGLE APPS/);
   assert.match(source, /let lastGoogleStatusCheck = false/);
 });

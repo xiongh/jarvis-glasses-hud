@@ -147,11 +147,21 @@
       busy = true; retry.disabled = true; say('Creating a short-lived glasses unlock request…');
       const run = generation;
       try {
-        const value = await request(fetchImpl, worker, '/v1/glasses/unlock/start', {});
+        // The host-only, HttpOnly registered-glasses cookie lives on the Auth
+        // Worker origin.  The initial request must include it; otherwise a
+        // valid association is indistinguishable from an unregistered device.
+        const value = await request(fetchImpl, worker, '/v1/glasses/unlock/start', {}, { credentials: 'include' });
         if (run !== generation) return false;
-        if (!/^[A-Za-z0-9_-]{24}$/.test(value.transactionId || '') || !/^[A-Za-z0-9_-]{43}$/.test(value.pollSecret || '') || !/^\d{8}$/.test(value.code || '') || !Number.isSafeInteger(value.expiresAt)) throw new Error('Unlock request was invalid.');
-        code.textContent = `IPHONE CODE · ${value.code}`; code.hidden = false;
-        say('Open the JARVIS Unlock page on your iPhone and enter this code.');
+        if (!/^[A-Za-z0-9_-]{24}$/.test(value.transactionId || '') || !/^[A-Za-z0-9_-]{43}$/.test(value.pollSecret || '') || !Number.isSafeInteger(value.expiresAt) || (value.automatic !== true && !/^\d{8}$/.test(value.code || ''))) throw new Error('Unlock request was invalid.');
+        if (value.automatic === true) {
+          code.hidden = true;
+          say(value.approved === true
+            ? 'Your current JARVIS Connections authorization is active. Unlocking this registered glasses device…'
+            : 'Unlock JARVIS Connections on your iPhone with Face ID or passkey. This registered glasses device will unlock automatically.');
+        } else {
+          code.textContent = `IPHONE CODE · ${value.code}`; code.hidden = false;
+          say('Open the JARVIS Unlock page on your iPhone and enter this code.');
+        }
         busy = false; retry.disabled = false; pollDelay = POLL_INTERVAL_MS; void poll(value.transactionId, value.pollSecret, run); return true;
       } catch (error) { if (run === generation) { busy = false; retry.disabled = false; say(error?.message || 'Could not start a phone approval request.'); } return false; }
     };

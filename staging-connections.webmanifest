@@ -1,0 +1,10 @@
+{
+  "name": "JARVIS Connections (Staging)",
+  "short_name": "Connections",
+  "description": "Owner-only JARVIS service connections for staging.",
+  "start_url": "./staging-apps-connect.html",
+  "display": "standalone",
+  "theme_color": "#090b10",
+  "background_color": "#090b10",
+  "icons": [{ "src": "./jarvis-connections-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

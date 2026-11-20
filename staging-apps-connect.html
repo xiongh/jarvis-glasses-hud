@@ -7,41 +7,61 @@
     <meta name="robots" content="noindex, nofollow" />
     <meta name="theme-color" content="#090b10" />
     <meta name="color-scheme" content="dark" />
-    <title>JARVIS staging Google Apps approval</title>
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="JARVIS Connections" />
+    <title>JARVIS staging Connections</title>
+    <link rel="manifest" href="./staging-connections.webmanifest" />
+    <link rel="apple-touch-icon" href="./jarvis-connections-icon.svg" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body class="phone-unlock-page">
     <main class="phone-unlock-card">
       <p class="eyebrow">JARVIS · STAGING</p>
-      <h1>Approve Google Apps device</h1>
-      <p>This page approves the Google Apps device pairing shown by the staging HUD. It is not the separate glasses-unlock page. Authenticate with your existing staging passkey, then enter the pairing ID and eight-digit code shown by the HUD. The owner session is kept only in this page’s memory.</p>
+      <h1>Connections</h1>
+      <p>Your iPhone is the single place for JARVIS provider sign-in and connection management. Glasses use the owner’s authorized JARVIS session; provider credentials never go to glasses.</p>
       <button id="staging-approve-authenticate" class="action" type="button">AUTHENTICATE WITH PASSKEY</button>
-      <form id="staging-approve-form" novalidate hidden>
-        <label for="staging-pairing-id">Pairing ID
-          <input id="staging-pairing-id" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="6" pattern="[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}" required />
-        </label>
-        <label for="staging-pairing-code">Eight-digit code
-          <input id="staging-pairing-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" required />
-        </label>
-        <fieldset>
-          <legend>Approve requested Google Apps access</legend>
-          <label><input name="staging-app" type="checkbox" value="gmail" checked /> Gmail</label>
-          <label><input name="staging-app" type="checkbox" value="google-calendar" checked /> Calendar</label>
-          <label><input name="staging-app" type="checkbox" value="google-contacts" checked /> Contacts</label>
-          <label><input name="staging-app" type="checkbox" value="google-drive" checked /> Drive</label>
-          <label><input name="staging-app" type="checkbox" value="google-docs" checked /> Docs</label>
-          <label><input name="staging-app" type="checkbox" value="google-sheets" checked /> Sheets</label>
-          <label><input name="staging-app" type="checkbox" value="google-tasks" checked /> Tasks</label>
+      <section id="staging-google-section" hidden>
+        <h2>Google Apps</h2>
+        <p id="staging-google-summary" role="status" aria-live="polite">Loading Google Apps status…</p>
+        <fieldset id="staging-google-apps">
+          <legend>Connected Google Apps</legend>
+          <label><input name="staging-google-app" type="checkbox" value="gmail" /> Gmail</label>
+          <label><input name="staging-google-app" type="checkbox" value="google-calendar" /> Calendar</label>
+          <label><input name="staging-google-app" type="checkbox" value="google-contacts" /> Contacts</label>
+          <label><input name="staging-google-app" type="checkbox" value="google-drive" /> Drive</label>
+          <label><input name="staging-google-app" type="checkbox" value="google-docs" /> Docs</label>
+          <label><input name="staging-google-app" type="checkbox" value="google-sheets" /> Sheets</label>
+          <label><input name="staging-google-app" type="checkbox" value="google-tasks" /> Tasks</label>
         </fieldset>
-        <button id="staging-approve-submit" class="action" type="submit">APPROVE PAIRING</button>
-      </form>
+        <p><button id="staging-google-connect" class="action" type="button">CONNECT SELECTED GOOGLE APPS</button>
+          <button id="staging-google-reconnect" class="action" type="button">RECONNECT GOOGLE</button>
+          <button id="staging-google-enable" class="action" type="button">ENABLE SELECTED</button>
+          <button id="staging-google-disable" class="action" type="button">DISABLE SELECTED</button>
+          <button id="staging-google-disconnect" class="action" type="button">DISCONNECT GOOGLE</button></p>
+      </section>
+      <section id="staging-youtube-section" hidden>
+        <h2>YouTube</h2>
+        <p id="staging-youtube-summary">Checking isolated YouTube connector availability…</p>
+        <button id="staging-youtube-manage" class="action" type="button">MANAGE YOUTUBE</button>
+      </section>
+      <section id="staging-service-status" class="connections-cards" hidden aria-label="Other JARVIS services">
+        <h2>Other services</h2>
+        <article class="connection-card"><h3>Outlook Mail</h3><p>Private phone connector exists. Staging provider configuration is not available, so no connect action is offered here.</p><span>SETUP REQUIRED</span></article>
+        <article class="connection-card"><h3>Outlook Calendar</h3><p>Private phone connector exists. Staging provider configuration is not available, so no connect action is offered here.</p><span>SETUP REQUIRED</span></article>
+        <article class="connection-card"><h3>Facebook</h3><p>A private connector module exists, but isolated staging provider authorization is not configured.</p><span>UNAVAILABLE IN STAGING</span></article>
+        <article class="connection-card"><h3>Instagram</h3><p>A private connector module exists, but isolated staging provider authorization is not configured.</p><span>UNAVAILABLE IN STAGING</span></article>
+        <article class="connection-card"><h3>TikTok</h3><p>A private connector module exists, but isolated staging provider authorization is not configured.</p><span>UNAVAILABLE IN STAGING</span></article>
+        <article class="connection-card"><h3>X</h3><p>A private connector module exists, but isolated staging provider authorization is not configured.</p><span>UNAVAILABLE IN STAGING</span></article>
+        <article class="connection-card"><h3>Maps</h3><p>No owner account is required. A dedicated phone or glasses Maps experience is not staged.</p><span>NO CONNECTION REQUIRED</span></article>
+        <article class="connection-card"><h3>Weather</h3><p>No owner account is required. A dedicated phone or glasses Weather experience is not staged.</p><span>NO CONNECTION REQUIRED</span></article>
+      </section>
       <button id="staging-approve-logout" class="action" type="button" hidden>LOG OUT</button>
-      <p id="staging-approve-status" role="status" aria-live="polite">Checking staging authentication support…</p>
-      <p id="staging-approve-confirmation" role="status" aria-live="polite" hidden>Google Apps device approval completed. Return to the staging HUD and tap CHECK PHONE APPROVAL; do not open the separate glasses-unlock page.</p>
-      <p class="small">Expired pairings, invalid codes, and exhausted attempts cannot be approved. Approval is one-time.</p>
+      <p id="staging-approve-status" role="status" aria-live="polite">Authenticate with your staging passkey to manage connections.</p>
+      <p class="small">YouTube is unavailable in staging until it has an isolated staging-only connector. It is never routed to a production account from this app.</p>
     </main>
     <script src="./auth-config.js"></script>
     <script src="./connectors-config.js"></script>
-    <script src="./staging-apps-connect.js?approval=20261111-2"></script>
+    <script src="./staging-apps-connect.js?connections=20261120-2"></script>
   </body>
 </html>

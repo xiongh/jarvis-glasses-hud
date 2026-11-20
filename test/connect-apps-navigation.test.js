@@ -2,16 +2,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createHud, navigationKey, bindHudKeyboard, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction } = require('../app');
+const { createHud, navigationKey, bindHudKeyboard, handleConnectAppsKey, handleAppScreenKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction } = require('../app');
 const { createGoogleConnectorClient } = require('../connectors');
 
 const makeAppsHud = () => {
-  const hud = createHud();
-  hud.select(); // welcome -> menu
-  hud.move(3); // CONNECT APPS
-  hud.select();
-  assert.equal(hud.snapshot().screen, 'connect-apps');
-  return hud;
+  // Retains unit coverage for the legacy device-pairing helper without making
+  // the removed Connect Apps screen reachable from the HUD menu.
+  let screen = 'connect-apps';
+  return { snapshot: () => ({ screen }), back: () => { screen = 'menu'; } };
 };
 
 const makeEvent = (key, target = { tagName: 'BODY' }) => ({
@@ -70,9 +68,50 @@ test('arrow navigation wraps focus without changing HUD screen; Escape uses the 
 test('Neural Band-compatible sparse key events are normalized for navigation', () => {
   assert.equal(navigationKey({ key: 'Unidentified', code: 'ArrowRight' }), 'ArrowRight');
   assert.equal(navigationKey({ key: 'Unidentified', keyCode: 13 }), 'Enter');
+  assert.equal(navigationKey({ key: 'BrowserBack' }), 'Escape');
+  assert.equal(navigationKey({ key: 'Unidentified', keyCode: 166 }), 'Escape');
   const hud = createHud(); hud.select();
   hud.handleKey({ key: 'Unidentified', which: 40, preventDefault() {} });
   assert.equal(hud.snapshot().selected, 1);
+});
+
+test('Media is the app home and Connect Apps is not present in HUD navigation', () => {
+  const hud = createHud(); hud.select();
+  assert.deepEqual(require('../app').MENU.map((item) => item.id), ['ai', 'vision', 'media', 'settings']);
+  hud.move(2); hud.select();
+  assert.equal(hud.snapshot().screen, 'media-apps');
+  assert.equal(hud.snapshot().mediaItem.id, 'youtube');
+  hud.select();
+  assert.equal(hud.snapshot().screen, 'youtube');
+  hud.back();
+  hud.move(1); hud.select();
+  assert.equal(hud.snapshot().screen, 'google-app');
+  hud.back();
+  assert.equal(hud.snapshot().screen, 'media-apps');
+  while (hud.snapshot().mediaSelected > 0) hud.move(-1);
+  hud.move(-1);
+  assert.equal(hud.snapshot().mediaBackFocused, true);
+  hud.select();
+  assert.equal(hud.snapshot().screen, 'menu');
+  hud.select();
+  while (hud.snapshot().mediaItem.id !== 'outlook-mail') hud.move(1);
+  hud.select();
+  assert.equal(hud.snapshot().screen, 'media-status');
+  hud.back();
+  assert.equal(hud.snapshot().screen, 'media-apps');
+});
+
+test('dedicated Google app screens retain D-pad controls and Back returns to Media', () => {
+  const hud = createHud(); hud.select(); hud.move(2); hud.select(); hud.move(1); hud.select();
+  assert.equal(hud.snapshot().screen, 'google-app');
+  const focused = [];
+  const controls = [{ focus: () => focused.push(0) }, { focus: () => focused.push(1) }];
+  const down = makeEvent('ArrowDown');
+  assert.equal(handleAppScreenKey(down, { hud, outlet: { querySelectorAll: () => controls }, document: { activeElement: controls[0] } }), true);
+  assert.deepEqual(focused, [1]);
+  const back = makeEvent('BrowserBack');
+  assert.equal(handleAppScreenKey(back, { hud, outlet: { querySelectorAll: () => controls }, document: { activeElement: controls[1] } }), true);
+  assert.equal(hud.snapshot().screen, 'media-apps');
 });
 
 test('HUD keyboard binding captures non-bubbling Neural Band key events before focused controls consume them', () => {

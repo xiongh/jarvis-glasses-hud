@@ -4,8 +4,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const PUBLIC_FILES = ['.nojekyll', 'app.js', 'auth-config.js', 'connectors-config.js', 'connectors.js', 'google-apps.html', 'google-apps.js', 'index.html', 'input-diagnostics.js', 'manifest.webmanifest', 'service-worker.js', 'staging-apps-connect.html', 'staging-apps-connect.js', 'staging-chat.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'unlock.html', 'unlock.js', 'youtube-player.js'];
-const HASHED_FILES = ['app.js', 'auth-config.js', 'connectors-config.js', 'connectors.js', 'google-apps.html', 'google-apps.js', 'index.html', 'input-diagnostics.js', 'manifest.webmanifest', 'service-worker.js', 'staging-apps-connect.html', 'staging-apps-connect.js', 'staging-chat.js', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'unlock.html', 'unlock.js', 'youtube-player.js'];
+const PUBLIC_FILES = ['.nojekyll', 'app.js', 'auth-config.js', 'connectors-config.js', 'connectors.js', 'google-apps.html', 'google-apps.js', 'index.html', 'input-diagnostics.js', 'jarvis-connections-icon.svg', 'manifest.webmanifest', 'service-worker.js', 'staging-apps-connect.html', 'staging-apps-connect.js', 'staging-chat.js', 'staging-connections.webmanifest', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'unlock.html', 'unlock.js', 'youtube-player.js'];
+const HASHED_FILES = ['app.js', 'auth-config.js', 'connectors-config.js', 'connectors.js', 'google-apps.html', 'google-apps.js', 'index.html', 'input-diagnostics.js', 'jarvis-connections-icon.svg', 'manifest.webmanifest', 'service-worker.js', 'staging-apps-connect.html', 'staging-apps-connect.js', 'staging-chat.js', 'staging-connections.webmanifest', 'staging-passkey.html', 'staging-passkey.js', 'styles.css', 'unlock.html', 'unlock.js', 'youtube-player.js'];
 const SHA = /^[a-f0-9]{64}$/;
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 

@@ -294,20 +294,6 @@ test('glasses arrow and Enter controls can operate the release actions', () => {
   assert.equal(clicked, 1);
 });
 
-test('a stale Check Updates focus cannot trap glasses navigation after a Google response redraw', () => {
-  const hudState = require('../app').createHud(); hudState.select(); hudState.move(3); hudState.select();
-  const document = { activeElement: null };
-  const staleUpdate = button(false, document); const updateGroup = { querySelectorAll: () => [staleUpdate] };
-  document.activeElement = staleUpdate;
-  const googleInput = button(false, document); const outlet = { querySelectorAll: () => [googleInput] };
-  const event = { key: 'ArrowDown', target: { closest: () => null }, prevented: false, preventDefault() { this.prevented = true; } };
-  assert.equal(hud.handleUpdateControlsKey(event, document), false);
-  assert.equal(hud.handleConnectAppsKey(event, { hud: hudState, outlet, document }), true);
-  assert.equal(event.prevented, true);
-  assert.equal(document.activeElement, googleInput);
-  assert.notEqual(event.target.closest('[data-update-controls]'), updateGroup);
-});
-
 test('Google Calendar response text is displayed unchanged by the HUD client', async () => {
   const state = { busy: false, result: '', status: '' };
   const formatted = '1. Today, 2:00 PM — Synthetic event';
@@ -333,9 +319,11 @@ test('Google Apps connectivity action only renders the sanitized relay report', 
   assert.equal(state.status, 'Google Apps connectivity test complete.');
 });
 
-test('canonical HUD retains the existing menu, passkey staging page, YouTube, and Google pairing entry points', () => {
+test('canonical HUD uses Media as the app home and retains the secured phone and device entry points', () => {
   const ids = hud.MENU.map((item) => item.id);
-  assert.deepEqual(ids, ['ai', 'vision', 'media', 'connect-apps', 'settings']);
+  assert.deepEqual(ids, ['ai', 'vision', 'media', 'settings']);
+  assert.equal(hud.MEDIA_APPS.some((item) => item.id === 'youtube'), true);
+  assert.equal(hud.MEDIA_APPS.filter((item) => item.experience === 'google-app').length, 7);
   assert.equal(hud.MENU.find((item) => item.id === 'vision').available, false, 'camera Vision remains explicitly unavailable pending native integration');
   for (const file of ['staging-passkey.html', 'staging-passkey.js', 'staging-apps-connect.html', 'staging-apps-connect.js', 'auth-config.js', 'unlock.html', 'unlock.js', 'youtube-player.js', 'connectors.js', 'connectors-config.js', 'google-apps.html', 'google-apps.js']) assert.equal(fs.existsSync(path.join(root, file)), true, `${file} remains part of the canonical app`);
   const authConfig = fs.readFileSync(path.join(root, 'auth-config.js'), 'utf8');
@@ -349,13 +337,13 @@ test('canonical HUD retains the existing menu, passkey staging page, YouTube, an
   assert.match(fs.readFileSync(path.join(root, 'connectors.js'), 'utf8'), /pairingAlias/);
 });
 
-test('staging approval entry point uses only isolated Workers and keeps the owner bearer out of persistent storage', () => {
+test('staging Connections app uses only isolated Workers and keeps the owner bearer out of persistent storage', () => {
   const html = fs.readFileSync(path.join(root, 'staging-apps-connect.html'), 'utf8');
   const script = fs.readFileSync(path.join(root, 'staging-apps-connect.js'), 'utf8');
-  assert.match(html, /staging-pairing-id/); assert.match(html, /staging-pairing-code/);
+  assert.match(html, /staging-connections\.webmanifest/); assert.match(html, /Outlook Mail/); assert.match(html, /Facebook/); assert.match(html, /NO CONNECTION REQUIRED/);
   assert.match(script, /jarvis-auth-staging\.hlao-xiong\.workers\.dev/);
   assert.match(script, /jarvis-connected-apps-staging\.hlao-xiong\.workers\.dev/);
-  assert.match(script, /\/v1\/owner\/hud\/pairings\/approve/);
+  assert.doesNotMatch(`${html}\n${script}`, /staging-pairing-id|owner\/hud\/pairings\/approve/);
   assert.match(script, /\/v1\/logout/);
   assert.doesNotMatch(`${html}\n${script}`, /localStorage|sessionStorage|indexedDB|desktop-frvv2vt\.taile1cf65\.ts\.net|jarvis-glasses-connected-apps\.hlao-xiong\.workers\.dev/);
 });

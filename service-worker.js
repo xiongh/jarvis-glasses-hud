@@ -2,7 +2,7 @@ const BUILD_ID = 'local';
 const CACHE_PREFIX = 'jarvis-glasses-hud-v5-';
 const ALL_CACHE_PREFIX = 'jarvis-glasses-hud-';
 const CACHE = `${CACHE_PREFIX}${BUILD_ID}`;
-const ASSETS = ['./', './index.html', './google-apps.html', './google-apps.js', './styles.css', './youtube-player.js', './auth-config.js', './unlock.html', './unlock.js', './connectors-config.js', './connectors.js', './app.js', './input-diagnostics.js', './staging-apps-connect.html', './staging-apps-connect.js?approval=20261111-2', './staging-passkey.html', './staging-passkey.js', './manifest.webmanifest', './release-manifest.json', './health.json'];
+const ASSETS = ['./', './index.html', './google-apps.html', './google-apps.js', './styles.css', './youtube-player.js', './auth-config.js', './unlock.html', './unlock.js', './connectors-config.js', './connectors.js', './app.js', './input-diagnostics.js', './staging-apps-connect.html', './staging-apps-connect.js?connections=20261120-1', './staging-passkey.html', './staging-passkey.js', './manifest.webmanifest', './staging-connections.webmanifest', './jarvis-connections-icon.svg', './release-manifest.json', './health.json'];
 self.addEventListener('install', (event) => event.waitUntil((async () => {
   const cache = await caches.open(CACHE);
   try {

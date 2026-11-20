@@ -19,10 +19,10 @@
   // from embedded WebViews without widening the accepted input.
   function navigationKey(event) {
     const key = String(event?.key || '');
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' '].includes(key)) return key;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'BrowserBack', 'GoBack', 'Back'].includes(key)) return ['BrowserBack', 'GoBack', 'Back'].includes(key) ? 'Escape' : key;
     const code = String(event?.code || '');
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', 'Space'].includes(code)) return code === 'Space' ? ' ' : code;
-    return ({ 8: 'Backspace', 13: 'Enter', 27: 'Escape', 32: ' ', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown' })[Number(event?.keyCode || event?.which)] || '';
+    return ({ 4: 'Escape', 8: 'Backspace', 13: 'Enter', 27: 'Escape', 32: ' ', 166: 'Escape', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown' })[Number(event?.keyCode || event?.which)] || '';
   }
 
   function bindHudKeyboard(target, listener) {
@@ -292,9 +292,30 @@
   const MENU = [
     { id: 'ai', title: 'AI', detail: 'Pair a separately hosted, least-privilege AI gateway to chat. No desktop JARVIS endpoint is exposed.', available: true },
     { id: 'vision', title: 'VISION', detail: 'Camera and sensor capture are not part of this Web App. A separately approved Device Access Toolkit integration is required.', available: false },
-    { id: 'media', title: 'MEDIA', detail: 'Connect YouTube on your phone and approve a one-time glasses pairing code. Google credentials remain in the cloud service.', available: true },
-    { id: 'connect-apps', title: 'CONNECT APPS', detail: 'YouTube pairs through its dedicated cloud service. Google, Microsoft, and Weather require the separately authenticated private Connect Apps bridge.', available: true },
+    { id: 'media', title: 'MEDIA', detail: 'Open JARVIS apps. Account connections and permissions are managed only from the JARVIS phone app.', available: true },
     { id: 'settings', title: 'SETTINGS', detail: 'Connection mode is standalone. This build contains no JARVIS server address, credentials, or development controls.', available: false },
+  ];
+
+  // This is a launcher, not a connector manager.  Each entry either opens an
+  // existing device-authorized experience or accurately explains why it cannot
+  // yet run on glasses. Provider sign-in always remains in the phone hub.
+  const MEDIA_APPS = [
+    { id: 'youtube', title: 'YOUTUBE', status: 'DEVICE APPROVAL REQUIRED', experience: 'youtube' },
+    { id: 'gmail', title: 'GMAIL', status: 'PHONE-MANAGED CONNECTION', experience: 'google-app' },
+    { id: 'calendar', title: 'CALENDAR', status: 'PHONE-MANAGED CONNECTION', experience: 'google-app' },
+    { id: 'contacts', title: 'CONTACTS', status: 'PHONE-MANAGED CONNECTION', experience: 'google-app' },
+    { id: 'drive', title: 'DRIVE', status: 'PHONE-MANAGED CONNECTION', experience: 'google-app' },
+    { id: 'documents', title: 'DOCS', status: 'PHONE-MANAGED CONNECTION', experience: 'google-app' },
+    { id: 'sheets', title: 'SHEETS', status: 'PHONE-MANAGED CONNECTION', experience: 'google-app' },
+    { id: 'tasks', title: 'TASKS', status: 'PHONE-MANAGED CONNECTION', experience: 'google-app' },
+    { id: 'outlook-mail', title: 'OUTLOOK MAIL', status: 'GLASSES ADAPTER NOT AVAILABLE', experience: 'status' },
+    { id: 'outlook-calendar', title: 'OUTLOOK CALENDAR', status: 'GLASSES ADAPTER NOT AVAILABLE', experience: 'status' },
+    { id: 'facebook', title: 'FACEBOOK', status: 'GLASSES ADAPTER NOT AVAILABLE', experience: 'status' },
+    { id: 'instagram', title: 'INSTAGRAM', status: 'GLASSES ADAPTER NOT AVAILABLE', experience: 'status' },
+    { id: 'tiktok', title: 'TIKTOK', status: 'GLASSES ADAPTER NOT AVAILABLE', experience: 'status' },
+    { id: 'x', title: 'X', status: 'GLASSES ADAPTER NOT AVAILABLE', experience: 'status' },
+    { id: 'maps', title: 'MAPS', status: 'HUD EXPERIENCE PLANNED · NO ACCOUNT REQUIRED', experience: 'status' },
+    { id: 'weather', title: 'WEATHER', status: 'HUD EXPERIENCE PLANNED · NO ACCOUNT REQUIRED', experience: 'status' },
   ];
 
   function registerHudUpdates(navigatorObject = globalThis.navigator, target = globalThis, documentObject = globalThis.document) {
@@ -434,6 +455,7 @@
         if (activatedBuildId && activatedBuildId !== currentBuild()) {
           activatedUpdateId = activatedBuildId;
           showReload(true);
+          show('A verified JARVIS update is ready. Choose RELOAD LATEST when convenient.');
           // An activation notice can arrive from another tab. Keep this page
           // usable and let its explicit RELOAD LATEST action decide when to
           // switch controllers.
@@ -481,21 +503,35 @@
   }
 
   function createHud({ render = () => {} } = {}) {
-    let state = { screen: 'welcome', selected: 0 };
-    const snapshot = () => ({ ...state, item: MENU[state.selected] && { ...MENU[state.selected] } });
+    let state = { screen: 'welcome', selected: 0, mediaSelected: 0, mediaAppId: '', mediaBackFocused: false, launch: '' };
+    const snapshot = () => ({ ...state, item: MENU[state.selected] && { ...MENU[state.selected] }, mediaItem: MEDIA_APPS[state.mediaSelected] && { ...MEDIA_APPS[state.mediaSelected] } });
     const commit = () => { render(snapshot()); return snapshot(); };
     const move = (delta) => {
-      state = { screen: 'menu', selected: (state.selected + delta + MENU.length) % MENU.length };
+      if (state.screen === 'media-apps') {
+        const direction = Math.sign(delta || 0);
+        if (!direction) return commit();
+        if (state.mediaBackFocused) state = { ...state, mediaBackFocused: false, mediaSelected: direction < 0 ? MEDIA_APPS.length - 1 : 0 };
+        else if ((direction > 0 && state.mediaSelected === MEDIA_APPS.length - 1) || (direction < 0 && state.mediaSelected === 0)) state = { ...state, mediaBackFocused: true };
+        else state = { ...state, mediaSelected: state.mediaSelected + direction };
+      }
+      else state = { ...state, screen: 'menu', selected: (state.selected + delta + MENU.length) % MENU.length };
       return commit();
     };
     const select = () => {
-      if (state.screen === 'welcome') state = { screen: 'menu', selected: 0 };
-      else if (state.screen === 'menu') state = { ...state, screen: state.selected === 0 ? 'chat' : state.selected === 2 ? 'youtube' : state.selected === 3 ? 'connect-apps' : 'detail' };
+      if (state.screen === 'welcome') state = { ...state, screen: 'menu', selected: 0 };
+      else if (state.screen === 'menu') {
+        const item = MENU[state.selected];
+        state = { ...state, screen: item?.id === 'ai' ? 'chat' : item?.id === 'media' ? 'media-apps' : 'detail', launch: '' };
+      } else if (state.screen === 'media-apps') {
+        const app = MEDIA_APPS[state.mediaSelected];
+        state = state.mediaBackFocused ? { ...state, screen: 'menu', mediaBackFocused: false, launch: '' } : { ...state, screen: app?.experience === 'youtube' ? 'youtube' : app?.experience === 'google-app' ? 'google-app' : 'media-status', mediaAppId: app?.id || '', launch: 'media' };
+      }
       else state = { screen: 'menu', selected: state.selected };
       return commit();
     };
     const back = () => {
-      if (state.screen === 'detail' || state.screen === 'chat' || state.screen === 'youtube' || state.screen === 'connect-apps') state = { ...state, screen: 'menu' };
+      if (state.screen === 'media-status' || state.screen === 'google-app' || state.screen === 'youtube' || (state.screen === 'chat' && state.launch === 'media')) state = { ...state, screen: 'media-apps', mediaBackFocused: false, launch: '' };
+      else if (state.screen === 'detail' || state.screen === 'chat' || state.screen === 'connect-apps') state = { ...state, screen: 'menu' };
       else if (state.screen === 'menu') state = { ...state, screen: 'welcome' };
       return commit();
     };
@@ -507,12 +543,14 @@
       if (key === 'Escape' || key === 'Backspace') { event?.preventDefault?.(); return back(); }
       return snapshot();
     };
-    return { snapshot, move, select, back, handleKey, render: commit };
+    const openMediaChat = () => { state = { ...state, screen: 'chat', launch: 'media' }; return commit(); };
+    const chooseMedia = (index) => { if (Number.isInteger(index) && index >= 0 && index < MEDIA_APPS.length) state = { ...state, mediaSelected: index, mediaBackFocused: false }; return commit(); };
+    return { snapshot, move, select, back, handleKey, openMediaChat, chooseMedia, render: commit };
   }
 
   function handleConnectAppsKey(event, { hud, outlet, document }) {
     const key = navigationKey(event);
-    if (hud.snapshot().screen !== 'connect-apps') return false;
+    if (!['connect-apps', 'media-device-access'].includes(hud.snapshot().screen)) return false;
     if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) && key !== 'Escape') return true;
     if (key === 'Escape' || key === 'Backspace') { event.preventDefault(); hud.back(); return true; }
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
@@ -532,6 +570,21 @@
       if (document.activeElement?.matches?.('[data-connectors-focus]:not(input)')) document.activeElement.click();
       return true;
     }
+    return false;
+  }
+
+  function handleAppScreenKey(event, { hud, outlet, document }) {
+    const key = navigationKey(event);
+    if (hud.snapshot().screen !== 'google-app') return false;
+    if (key === 'Escape' || key === 'Backspace') { event.preventDefault(); hud.back(); return true; }
+    if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName)) return key !== 'Escape';
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
+      event.preventDefault();
+      const controls = [...outlet.querySelectorAll('[data-app-focus]:not(:disabled)')];
+      if (controls.length) { const current = controls.indexOf(document.activeElement); const direction = ['ArrowUp', 'ArrowLeft'].includes(key) ? -1 : 1; controls[(current + direction + controls.length) % controls.length].focus(); }
+      return true;
+    }
+    if (key === 'Enter' || key === ' ') { event.preventDefault(); if (document.activeElement?.matches?.('[data-app-focus]:not(input)')) document.activeElement.click(); return true; }
     return false;
   }
 
@@ -598,7 +651,7 @@
 
   // This client deliberately keeps only the one-use handoff in memory.  The
   // Connected Apps Worker converts it to an HttpOnly, owner-bound cookie; no
-  // Auth bearer or Google credential is ever exposed to HUD JavaScript.
+  // No authentication credential or Google credential is ever exposed to HUD JavaScript.
   function createOwnerAppsClient({ authWorker, appsWorker, fetchImpl = globalThis.fetch, onDiagnostic = () => {} } = {}) {
     const request = async (origin, path, options = {}) => {
       const stage = options.stage || 'unknown'; onDiagnostic({ stage, state: 'attempted' });
@@ -752,6 +805,16 @@
     let youtubeRecordedStart = false;
     let youtubePairTimer = null;
     let youtubePairCheckBusy = false;
+    const GOOGLE_APP_SCREENS = Object.freeze({
+      gmail: { grant: 'gmail', title: 'GMAIL', placeholder: 'Search or ask about email', initial: 'SHOW MY LATEST EMAILS', suggestions: ['SHOW MY LATEST EMAILS', 'FIND UNREAD EMAIL'] },
+      calendar: { grant: 'google-calendar', title: 'CALENDAR', placeholder: 'Ask about your calendar', initial: "WHAT'S ON MY CALENDAR TODAY?", suggestions: ["WHAT'S ON MY CALENDAR TODAY?", "WHAT'S ON MY CALENDAR TOMORROW?", "WHAT'S ON MY CALENDAR NEXT WEEK?"] },
+      contacts: { grant: 'google-contacts', title: 'CONTACTS', placeholder: 'Find a contact', initial: 'SHOW RECENT CONTACTS', suggestions: ['FIND A CONTACT', 'SHOW RECENT CONTACTS'] },
+      drive: { grant: 'google-drive', title: 'DRIVE', placeholder: 'Find a file or folder', initial: 'FIND MY RECENT DRIVE FILES', suggestions: ['FIND MY RECENT DRIVE FILES', 'SHOW MY DRIVE FOLDERS'] },
+      documents: { grant: 'google-docs', title: 'DOCS', placeholder: 'Find or read a document', initial: 'SHOW MY GOOGLE DOCS', suggestions: ['FIND MY RECENT GOOGLE DOCS', 'SHOW MY GOOGLE DOCUMENTS'] },
+      sheets: { grant: 'google-sheets', title: 'SHEETS', placeholder: 'Find a spreadsheet', initial: 'SHOW MY GOOGLE SHEETS', suggestions: ['FIND MY RECENT SHEETS', 'SHOW MY GOOGLE SPREADSHEETS'] },
+      tasks: { grant: 'google-tasks', title: 'TASKS', placeholder: 'Ask about tasks', initial: 'SHOW MY UNFINISHED TASKS', suggestions: ['SHOW MY UNFINISHED TASKS', 'SHOW MY COMPLETED TASKS'] },
+    });
+    const googleAppViews = Object.fromEntries(Object.keys(GOOGLE_APP_SCREENS).map((id) => [id, { busy: false, status: 'RESTORING PHONE-MANAGED CONNECTION…', result: '', initialized: false }]));
     const clearYoutubeProgress = () => { if (youtubeProgressTimer) clearInterval(youtubeProgressTimer); youtubeProgressTimer = null; };
     const saveYoutubeProgress = async () => {
       if (!youtubePlayer?.active || !youtubeState.current || !youtubeRecordedStart) return;
@@ -849,6 +912,27 @@
         render(hud.snapshot());
       } finally { youtubePairCheckBusy = false; }
     };
+    const runGoogleAppCommand = async (appId, command) => {
+      const screen = GOOGLE_APP_SCREENS[appId], view = googleAppViews[appId];
+      if (!screen || !view || view.busy) return;
+      const message = String(command || '').trim();
+      if (!message || message.length > 1200) { view.status = 'ENTER A REQUEST OF 1 TO 1,200 CHARACTERS'; render(hud.snapshot()); return; }
+      view.busy = true; view.result = ''; view.status = `READING AUTHORIZED ${screen.title}…`; render(hud.snapshot());
+      try {
+        if (!googleConnectors?.paired()) {
+          view.status = `${screen.title} NEEDS PHONE APPROVAL · OPEN CONNECT APPS`;
+          return;
+        }
+        if (!googleConnectors.apps.includes(screen.grant)) {
+          view.status = `${screen.title} WAS NOT APPROVED FOR THIS DEVICE`;
+          return;
+        }
+        view.result = String(await googleConnectors.runCommand(message) || 'No matching information was found.');
+        view.status = `${screen.title} · READ-ONLY · COMPLETE`;
+      } catch (error) {
+        view.status = `${screen.title} COULD NOT BE READ · TRY AGAIN`;
+      } finally { view.busy = false; render(hud.snapshot()); }
+    };
     const render = (state) => {
       outlet.classList?.toggle('youtube-mode', state.screen === 'youtube');
       outlet.replaceChildren();
@@ -867,6 +951,49 @@
           if (index === state.selected) queueMicrotask(() => button.focus());
         });
         outlet.append(menu); return;
+      }
+      if (state.screen === 'media-apps') {
+        outlet.append(make('p', 'eyebrow', 'JARVIS APPS'), make('h1', 'detail-title', 'MEDIA'));
+        outlet.append(make('p', 'copy media-launcher-help', 'Use the Band or thumb controls to select an app. Connections, permissions, and account changes happen only in the JARVIS phone app.'));
+        const grid = make('div', 'media-app-grid', ''); grid.setAttribute('aria-label', 'JARVIS app launcher');
+        MEDIA_APPS.forEach((app, index) => {
+          const tile = make('button', `media-app-tile${app.experience === 'status' ? ' unavailable' : ''}`, '');
+          tile.type = 'button'; tile.setAttribute('aria-current', String(!state.mediaBackFocused && index === state.mediaSelected));
+          tile.dataset.mediaApp = app.id;
+          tile.append(make('strong', '', app.title), make('small', '', app.status));
+          tile.addEventListener('click', () => { hud.chooseMedia(index); hud.select(); });
+          grid.append(tile);
+          if (!state.mediaBackFocused && index === state.mediaSelected) queueMicrotask(() => tile.focus());
+        });
+        const status = make('p', 'status media-phone-status', 'OWNER CONNECTIONS RESTORE AFTER JARVIS UNLOCK'); status.setAttribute('role', 'status');
+        const backButton = make('button', 'action', 'BACK TO JARVIS MENU'); backButton.type = 'button'; backButton.setAttribute('aria-current', String(state.mediaBackFocused)); backButton.addEventListener('click', () => hud.back()); if (state.mediaBackFocused) queueMicrotask(() => backButton.focus());
+        outlet.append(grid, status, backButton); return;
+      }
+      if (state.screen === 'media-status') {
+        const app = MEDIA_APPS.find((candidate) => candidate.id === state.mediaAppId) || { title: 'JARVIS APP', status: 'UNAVAILABLE' };
+        outlet.append(make('p', 'eyebrow', 'JARVIS APPS'), make('h1', 'detail-title', app.title), make('span', 'unavailable-label', app.status), make('p', 'copy', 'This app does not have an owner-scoped glasses experience yet. Do not enter provider credentials on glasses. If this service needs an account, connect or review it in the JARVIS phone app.'));
+        const backButton = make('button', 'action', 'BACK TO MEDIA'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
+      }
+      if (state.screen === 'google-app') {
+        const app = GOOGLE_APP_SCREENS[state.mediaAppId], view = googleAppViews[state.mediaAppId];
+        if (!app || !view) { hud.back(); return; }
+        if (!view.initialized) { view.initialized = true; queueMicrotask(() => { void runGoogleAppCommand(state.mediaAppId, app.initial); }); }
+        outlet.append(make('p', 'eyebrow', 'JARVIS APPS'), make('h1', 'detail-title', app.title));
+        const status = make('p', 'status', view.status); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); outlet.append(status);
+        const form = document.createElement('form'); form.className = 'hud-youtube-search';
+        const input = document.createElement('input'); input.type = 'text'; input.maxLength = 1200; input.placeholder = app.placeholder; input.setAttribute('aria-label', `${app.title} request`); input.dataset.appFocus = 'true'; input.disabled = view.busy;
+        const submit = make('button', 'action hud-youtube-search-button', 'READ'); submit.type = 'submit'; submit.dataset.appFocus = 'true'; submit.disabled = view.busy;
+        form.addEventListener('submit', (event) => { event.preventDefault(); void runGoogleAppCommand(state.mediaAppId, input.value); }); form.append(input, submit); outlet.append(form);
+        const suggestions = make('div', 'hud-youtube-nav', ''); suggestions.setAttribute('aria-label', `${app.title} suggestions`);
+        app.suggestions.forEach((suggestion) => { const button = make('button', 'action hud-youtube-tab', suggestion); button.type = 'button'; button.dataset.appFocus = 'true'; button.disabled = view.busy; button.addEventListener('click', () => { void runGoogleAppCommand(state.mediaAppId, suggestion); }); suggestions.append(button); }); outlet.append(suggestions);
+        if (view.result) {
+          const result = make('pre', 'copy', view.result); result.setAttribute('aria-label', `${app.title} read-only result`); outlet.append(result);
+          const numbered = [...view.result.matchAll(/^\s*(\d{1,2})\.\s+.+$/gm)].map((match) => Number(match[1])).filter((number, index, values) => number >= 1 && number <= 10 && values.indexOf(number) === index);
+          const selectCommand = { gmail: (n) => `READ EMAIL ${n}`, calendar: (n) => `SHOW CALENDAR EVENT ${n}`, contacts: (n) => `SHOW CONTACT ${n}`, drive: (n) => `OPEN FILE ${n}`, documents: (n) => `READ DOCUMENT ${n}`, sheets: (n) => `READ SHEET ${n}`, tasks: (n) => `SHOW TASK ${n}` }[state.mediaAppId];
+          if (selectCommand && numbered.length) { const choices = make('div', 'hud-youtube-nav', ''); choices.setAttribute('aria-label', `${app.title} result selection`); numbered.forEach((number) => { const button = make('button', 'action hud-youtube-tab', `OPEN ${number}`); button.type = 'button'; button.dataset.appFocus = 'true'; button.disabled = view.busy; button.addEventListener('click', () => { void runGoogleAppCommand(state.mediaAppId, selectCommand(number)); }); choices.append(button); }); outlet.append(choices); }
+        }
+        outlet.append(make('p', 'copy hud-youtube-help', 'READ-ONLY · CONNECTIONS AND ACCOUNT MANAGEMENT STAY IN THE JARVIS PHONE APP'));
+        const backButton = make('button', 'action', 'BACK TO MEDIA'); backButton.type = 'button'; backButton.dataset.appFocus = 'true'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
       }
       if (state.screen === 'chat') {
         outlet.append(make('p', 'eyebrow', 'JARVIS AI'), make('h1', 'detail-title', 'AI CHAT'));
@@ -898,23 +1025,22 @@
           const googleMessage = retryGoogleOperation ? retryGoogleOperation.message : directGoogleApp ? message : lastGoogleApp ? `${message} ${lastGoogleApp}` : message;
           let activeGoogleOperation = retryGoogleOperation || (useGoogleApps && directGoogleApp ? { message, app: directGoogleApp, createdAt: Date.now() } : null);
           if (statusCheck) chatStatus = 'CHECKING AUTHORIZED GOOGLE APPS…';
-          else if (useGoogleApps) chatStatus = googleConnectors?.paired() || (ownerApps && ownerAppsState.ready && ownerAppsState.connected.size) ? 'READING AUTHORIZED GOOGLE APPS…' : 'GOOGLE APPS APPROVAL REQUIRED · OPEN CONNECT APPS';
+          else if (useGoogleApps) chatStatus = googleConnectors?.paired() ? 'READING AUTHORIZED GOOGLE APPS…' : 'GOOGLE APPS APPROVAL REQUIRED · OPEN CONNECT APPS';
           else chatStatus = evaluation ? 'TESTING GRANITE · JARVIS IS THINKING…' : 'SENDING GLM · JARVIS IS THINKING…'; render(hud.snapshot());
           try {
             if (!evaluation && (isConversationRecapRequest(message) || (conversationMemory.size && isConversationTimelineFollowUp(message)))) {
               const reply = conversationMemory.recap(); appendConversation('glm', { role: 'user', text: message, kind: 'recap' }, { role: 'assistant', text: reply, kind: 'recap' });
               clearChatTransport(); chatStatus = `SESSION RECAP · ${Date.now() - startedAt} MS`;
             } else if (statusCheck) {
-              if (!ownerApps) throw new Error('Google Apps owner authorization is not configured.');
-              const grant = await ownerApps.status();
-              const reply = googleStatusReply(grant, directGoogleApp);
+              const reply = googleConnectors?.paired() ? String(await googleConnectors.runCommand('__JARVIS_GOOGLE_CONNECTIVITY_TEST_V1__')) : 'Google Apps needs phone approval for this glasses session. Open Connect Apps, then approve the short-lived read-only device request on your phone.';
               appendConversation('glm', { role: 'user', text: message, kind: 'google' }, { role: 'assistant', text: reply, kind: 'google' });
-              conversationMemory.recordGoogle(directGoogleApp || 'apps', grant.authorizationState || (grant.connected ? 'completed' : 'requested'));
+              conversationMemory.recordGoogle(directGoogleApp || 'apps', googleConnectors?.paired() ? 'completed' : 'requested');
               lastGoogleStatusCheck = true;
               clearChatTransport(); chatStatus = `GOOGLE APPS STATUS · ${Date.now() - startedAt} MS`;
             } else if (useGoogleApps) {
-              const ownerReadReady = Boolean(ownerApps && ownerAppsState.ready && ownerAppsState.connected.size);
-              const googleResult = ownerReadReady ? await ownerApps.readCommand(googleMessage) : googleConnectors?.paired() ? await googleConnectors.runCommand(googleMessage) : 'Connect Google Apps from the JARVIS menu, then approve this glasses session on your phone before asking that read-only request.';
+              // Provider login and grant management remain phone-only. The
+              // glasses use an already approved, short-lived device capability.
+              const googleResult = googleConnectors?.paired() ? await googleConnectors.runCommand(googleMessage) : 'Connect Google Apps from the JARVIS menu, then approve this glasses session on your phone before asking that read-only request.';
               const reply = googleResult?.analysis && stagingChat?.analyzeDocument ? await stagingChat.analyzeDocument(googleResult.analysis.instruction, googleResult.analysis.text) : (typeof googleResult === 'string' ? googleResult : googleResult.content);
               appendConversation('glm', { role: 'user', text: message, kind: 'google' }, { role: 'assistant', text: reply, kind: 'google' });
               if (directGoogleApp) lastGoogleApp = directGoogleApp;
@@ -923,7 +1049,7 @@
               const resultStatus = typeof googleResult === 'string' ? 'completed' : String(googleResult?.status || 'completed');
               lastGoogleOperation = resultStatus === 'temporary_error' && activeGoogleOperation ? activeGoogleOperation : null;
               conversationMemory.recordGoogle(directGoogleApp || lastGoogleApp, googleResult?.analysis ? 'completed' : typeof googleResult === 'string' ? 'completed' : googleResult?.status);
-              clearChatTransport(); chatStatus = ownerReadReady || googleConnectors?.paired() ? `GOOGLE APPS · READ-ONLY · ${Date.now() - startedAt} MS` : 'GOOGLE APPS APPROVAL REQUIRED · NO GOOGLE REQUEST WAS SENT';
+              clearChatTransport(); chatStatus = googleConnectors?.paired() ? `GOOGLE APPS · READ-ONLY · ${Date.now() - startedAt} MS` : 'GOOGLE APPS NOT CONNECTED · NO GOOGLE REQUEST WAS SENT';
             } else {
               const reply = await stagingChat.send(message, history, { evaluation }); appendConversation(conversation, { role: 'user', text: message }, { role: 'assistant', text: reply }); conversationMemory.recordChat(message, reply, conversation); clearChatTransport(); chatStatus = evaluation ? `GRANITE 4.0 H MICRO · ${Date.now() - startedAt} MS · RETURN TO GLM` : `GLM-4.7-FLASH · ${Date.now() - startedAt} MS`;
             }
@@ -955,7 +1081,9 @@
         const backButton = make('button', 'action', 'BACK TO MENU'); backButton.type = 'button'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
       }
       if (state.screen === 'connect-apps') {
-        if (ownerApps) {
+        // The phone hub owns provider login, scopes, reconnection, and
+        // disconnect.  Keep this HUD on the device-capability path below.
+        if (false && ownerApps) {
           const names = { gmail: 'Gmail', 'google-calendar': 'Google Calendar', 'google-contacts': 'Google Contacts', 'google-drive': 'Google Drive', 'google-docs': 'Google Docs', 'google-sheets': 'Google Sheets', 'google-tasks': 'Google Tasks' };
           const status = make('p', 'status', ownerAppsState.status); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
           outlet.append(make('h1', '', 'CONNECT APPS'), status, make('p', 'copy', 'Select the Google Apps JARVIS may access. Existing connections remain active unless you explicitly revoke them elsewhere.'));
@@ -1020,10 +1148,10 @@
         const youtubeBrand = make('div', 'hud-youtube-brand', '');
         const youtubeMark = make('span', 'hud-youtube-mark', '▶'); youtubeMark.setAttribute('aria-hidden', 'true');
         youtubeBrand.append(youtubeMark, make('h1', 'hud-youtube-title', 'YouTube'));
-        const accountControl = make('button', 'hud-youtube-account-control', !youtubeState.sessionReady ? 'CHECKING' : requiresReauth ? 'REAUTHORIZE' : connected ? 'CONNECTED' : 'NOT CONNECTED');
-        accountControl.type = 'button'; accountControl.dataset.youtubeFocus = 'true'; accountControl.disabled = !connected && !requiresReauth;
-        accountControl.setAttribute('aria-label', requiresReauth ? 'Reauthorize YouTube on your phone' : connected ? 'Connected YouTube account settings' : 'YouTube account not connected');
-        accountControl.addEventListener('click', () => { if (requiresReauth) globalThis.open?.(`${youtube.backendOrigin}/connect?reauthorize=1`, '_blank', 'noopener,noreferrer'); else void loadYoutubeSection(youtubeState.section === 'account' ? 'subscriptions' : 'account'); });
+        const accountControl = make('button', 'hud-youtube-account-control', !youtubeState.sessionReady ? 'CHECKING' : requiresReauth ? 'PHONE REQUIRED' : connected ? 'CONNECTED' : 'PHONE REQUIRED');
+        accountControl.type = 'button'; accountControl.dataset.youtubeFocus = 'true'; accountControl.disabled = !connected;
+        accountControl.setAttribute('aria-label', requiresReauth ? 'YouTube needs phone reauthorization' : connected ? 'Connected YouTube account' : 'YouTube account not connected');
+        accountControl.addEventListener('click', () => { if (connected) void loadYoutubeSection(youtubeState.section === 'account' ? 'subscriptions' : 'account'); });
         youtubeHeader.append(youtubeBrand, accountControl);
         const status = make('p', 'status hud-youtube-status', youtubeState.status);
         const searchForm = document.createElement('form'); searchForm.className = 'hud-youtube-search';
@@ -1052,45 +1180,16 @@
         } else if (youtube.hasSession() && !youtubeState.sessionVerified) {
           const retry = make('button', 'action', 'RETRY CONNECTION CHECK'); retry.type = 'button'; retry.dataset.youtubeFocus = 'true'; retry.addEventListener('click', () => { youtubeState.sessionReady = false; youtubeState.status = 'Checking saved YouTube connection…'; render(hud.snapshot()); void restoreYoutubeSession(); }); outlet.append(retry);
         } else if (requiresReauth) {
-          const reconnect = document.createElement('a'); reconnect.className = 'action hud-youtube-handoff'; reconnect.href = `${youtube.backendOrigin}/connect?reauthorize=1`; reconnect.target = '_blank'; reconnect.rel = 'noopener noreferrer'; reconnect.textContent = 'RECONNECT YOUTUBE'; reconnect.dataset.youtubeFocus = 'true'; outlet.append(reconnect, make('p', 'copy hud-youtube-help', 'Review and approve YouTube read-only access on your phone. JARVIS keeps Google tokens on the Worker.'));
+          outlet.append(make('p', 'copy hud-youtube-help', 'YouTube needs reconnection. Open the JARVIS phone app to reconnect or disconnect the account. Provider sign-in is not available on glasses.'));
         } else if (!youtube.paired()) {
-          const pair = make('button', 'action', 'CONNECT YOUTUBE'); pair.type = 'button'; pair.dataset.youtubeFocus = 'true'; pair.addEventListener('click', async () => {
-            // Open a phone/browser tab during the user gesture so iOS Safari does
-            // not block the later pairing handoff as an unsolicited popup.
-            let phoneWindow = null; try { phoneWindow = globalThis.open?.('about:blank', '_blank'); if (phoneWindow) phoneWindow.opener = null; } catch {}
-            pair.disabled = true; youtubeState.status = 'Creating a short-lived pairing code…'; status.textContent = youtubeState.status;
-            try {
-              const pairing = await youtube.startPairing(); youtubeState.pairing = pairing;
-              if (phoneWindow) { try { phoneWindow.location.replace(pairing.connectUrl); } catch { phoneWindow.close?.(); phoneWindow = null; } }
-              youtubeState.status = 'Continue on your phone to authorize YouTube. This one-time link expires in five minutes.'; render(hud.snapshot());
-              if (youtubePairTimer) clearInterval(youtubePairTimer);
-              youtubePairTimer = setInterval(() => { void checkYoutubePairing(); }, 2_500);
-            } catch (error) { youtubeState.status = error.message || 'Could not create a pairing request. Check the HTTPS Worker origin.'; status.textContent = youtubeState.status; }
-            finally { pair.disabled = false; }
-          });
-          outlet.append(pair, make('p', 'copy hud-youtube-help', 'Authorize on your phone. The short-lived link is bound to this one-time glasses pairing.'));
-          if (youtubeState.pairing) {
-            const codeDisplay = make('h2', 'hud-youtube-pair-code', youtubeState.pairing.userCode); codeDisplay.setAttribute('aria-label', 'One-time phone approval code');
-            const help = make('p', 'copy hud-youtube-help', 'If automatic opening was blocked, use the secure phone link below. Google sign-in and approval continue automatically.');
-            const servicePage = make('a', 'action hud-youtube-handoff', 'OPEN PHONE SIGN-IN'); servicePage.href = youtubeState.pairing.connectUrl; servicePage.target = '_blank'; servicePage.rel = 'noopener noreferrer'; servicePage.dataset.youtubeFocus = 'true';
-            const sharePhoneLink = make('button', 'action', 'SHARE PHONE SIGN-IN LINK'); sharePhoneLink.type = 'button'; sharePhoneLink.dataset.youtubeFocus = 'true'; sharePhoneLink.addEventListener('click', async () => {
-              try {
-                if (globalThis.navigator?.share) await globalThis.navigator.share({ title: 'JARVIS YouTube pairing', text: 'Open this short-lived link on your phone to connect YouTube.', url: youtubeState.pairing.connectUrl });
-                else if (globalThis.navigator?.clipboard?.writeText) { await globalThis.navigator.clipboard.writeText(youtubeState.pairing.connectUrl); youtubeState.status = 'One-time phone link copied. Open it on your phone before it expires.'; status.textContent = youtubeState.status; }
-                else { youtubeState.status = 'Use OPEN PHONE SIGN-IN or enter the one-time code on the phone connection page.'; status.textContent = youtubeState.status; }
-              } catch (error) { youtubeState.status = error?.name === 'AbortError' ? 'Phone link sharing was cancelled. The one-time link remains available below.' : 'Could not share the phone link. Open it directly below.'; status.textContent = youtubeState.status; }
-            });
-            const check = make('button', 'action', 'CHECK PHONE APPROVAL'); check.type = 'button'; check.dataset.youtubeFocus = 'true'; check.addEventListener('click', () => { void checkYoutubePairing(); });
-            outlet.append(codeDisplay, help, servicePage, sharePhoneLink, check);
-          }
+          outlet.append(make('p', 'copy hud-youtube-help', 'YouTube is not available for this owner session. Check its connection in the JARVIS phone app.'));
         } else {
           if (youtubeState.section === 'account') {
             const accountCard = make('section', 'hud-youtube-account-card', '');
             accountCard.append(make('strong', '', `Connected account: ${youtubeState.account?.email || 'Google account'}`), make('p', 'copy', 'Google tokens remain on the JARVIS YouTube Worker. Revoke access or disconnect from the phone account page.'));
             const history = make('button', 'action hud-youtube-account-action', 'JARVIS HISTORY'); history.type = 'button'; history.dataset.youtubeFocus = 'true'; history.addEventListener('click', () => void loadYoutubeSection('history'));
             const favorites = make('button', 'action hud-youtube-account-action', 'FAVORITES'); favorites.type = 'button'; favorites.dataset.youtubeFocus = 'true'; favorites.addEventListener('click', () => void loadYoutubeSection('favorites'));
-            const manage = document.createElement('a'); manage.className = 'action hud-youtube-account-action'; manage.href = `${youtube.backendOrigin}/connect`; manage.target = '_blank'; manage.rel = 'noopener noreferrer'; manage.textContent = 'MANAGE ACCOUNT ON PHONE'; manage.dataset.youtubeFocus = 'true';
-            accountCard.append(history, favorites, manage); outlet.append(accountCard);
+            accountCard.append(history, favorites); outlet.append(accountCard);
           } else if (youtubeState.current) {
             const title = make('h2', 'hud-youtube-video-title', youtubeState.current.title || 'YouTube video'); outlet.append(title);
             const shell = make('div', `hud-youtube-player-shell${youtubeState.current.kind === 'short' ? ' is-short' : ''}`, ''); shell.id = 'hud-youtube-player'; shell.setAttribute('aria-label', 'YouTube embedded video player'); outlet.append(shell);
@@ -1133,11 +1232,13 @@
     const authorizeOwnerApps = async () => {
       if (!ownerApps || ownerAppsState.busy) return;
       ownerAppsState.busy = true; ownerAppsState.ready = false; ownerAppsState.grantState = 'checking'; ownerAppsState.status = 'Verifying your unlocked owner session…'; render(hud.snapshot());
-      try { await ownerApps.authorize(); const grant = await ownerApps.status(); ownerAppsDiagnostics.hud = 'active'; ownerAppsState.connected = new Set(grant.apps || []); ownerAppsState.disabled = new Set(grant.disabledApps || []); ownerAppsState.grantState = grant.reconnectRequired === true ? 'reconnect-required' : grant.connected ? 'verified' : 'missing'; ownerAppsState.status = grant.reconnectRequired === true ? 'A previous Google authorization needs reconnection.' : grant.connected ? 'Owner session verified. Choose apps to add or update.' : 'Owner session verified. Choose apps to connect.'; ownerAppsState.ready = true; }
-      catch (error) { ownerAppsState.grantState = 'unavailable'; ownerAppsDiagnostics.hud = error?.status === 401 ? 'unavailable' : ownerAppsDiagnostics.hud; ownerAppsState.status = error?.status === 401 ? 'Unlock JARVIS with your iPhone to connect apps.' : 'Owner authorization is temporarily unavailable. Retry authorization.'; }
+      try { await ownerApps.authorize(); const grant = await ownerApps.status(); ownerAppsDiagnostics.hud = 'active'; ownerAppsState.connected = new Set(grant.apps || []); ownerAppsState.disabled = new Set(grant.disabledApps || []); ownerAppsState.grantState = grant.reconnectRequired === true ? 'reconnect-required' : grant.connected ? 'verified' : 'missing'; ownerAppsState.status = grant.reconnectRequired === true ? 'Google Apps needs reconnection in the phone app.' : grant.connected ? 'Phone-managed Google Apps connection restored.' : 'Google Apps is not connected for this owner.'; ownerAppsState.ready = true; }
+      catch (error) { ownerAppsState.grantState = 'unavailable'; ownerAppsDiagnostics.hud = error?.status === 401 ? 'unavailable' : ownerAppsDiagnostics.hud; ownerAppsState.status = error?.status === 401 ? 'Unlock JARVIS with your iPhone to restore phone-managed apps.' : 'Phone-managed app access is temporarily unavailable.'; }
       finally { ownerAppsState.busy = false; if (hud) render(hud.snapshot()); }
     };
-    if (ownerApps) void authorizeOwnerApps();
+    // A fresh unlock is the sole glasses authorization event. The exchange
+    // creates only an HttpOnly owner session for allowed read-only commands.
+    if (false && ownerApps) void authorizeOwnerApps();
     // A LOCK invalidates the Auth session that backs the Connected Apps
     // cookie. Once Face ID creates a new Auth session, exchange a fresh
     // one-time handoff and reload the existing encrypted Google grant. This
@@ -1146,7 +1247,7 @@
       ownerAppsState.ready = false; ownerAppsState.grantState = 'checking'; ownerAppsState.connected = new Set(); ownerAppsState.disabled = new Set(); ownerAppsState.status = 'Owner session locked. Unlock again to restore Connected Apps.';
       ownerAppsDiagnostics.session = 'unavailable'; ownerAppsDiagnostics.googleStatus = 'not-attempted'; ownerAppsDiagnostics.lastStatus = 'none'; ownerAppsDiagnostics.category = 'none';
     });
-    document.addEventListener?.('jarvis-session-unlocked', () => { if (ownerApps) void authorizeOwnerApps(); });
+    document.addEventListener?.('jarvis-session-unlocked', () => { if (false && ownerApps) void authorizeOwnerApps(); });
     const restoreYoutubeSession = async () => {
       const result = await youtube.restore();
       youtubeState.sessionReady = true;
@@ -1163,6 +1264,7 @@
       const key = navigationKey(event);
       if (handleUpdateControlsKey(event, document)) return;
       if (handleConnectAppsKey(event, { hud, outlet, document })) return;
+      if (handleAppScreenKey(event, { hud, outlet, document })) return;
       if (hud.snapshot().screen === 'youtube') {
         if (key === 'Escape' || key === 'Backspace') { event.preventDefault(); if (youtubeState.current) { leaveYoutubePlayer(); render(hud.snapshot()); } else hud.back(); return; }
         if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName)) return;
@@ -1182,8 +1284,6 @@
     bindHudKeyboard(globalThis.addEventListener ? globalThis : document, handleHudKeydown);
     globalThis.addEventListener?.('popstate', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); });
     hud.render();
-    void googleAppsActions.restore();
-    globalThis.addEventListener?.('online', () => { if (!googleConnectors?.paired()) void googleAppsActions.restore(); });
     void restoreYoutubeSession().catch(() => { youtubeState.sessionReady = true; youtubeState.sessionVerified = false; youtubeState.status = 'Could not verify the saved YouTube session. Check the connection and retry.'; render(hud.snapshot()); });
     return hud;
   }
@@ -1200,5 +1300,5 @@
     }
     boot(document);
   }, { once: true });
-  return { MENU, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, navigationKey, bindHudKeyboard, isGoogleReadRequest, isGoogleStatusRequest, isGoogleStatusFollowUp, isGoogleRetryRequest, usableGoogleRetry, googleStatusReply, googleAppHint, isGoogleFollowUp, matchesRecentGmailSubject, isConversationRecapRequest, isConversationTimelineFollowUp, createConversationMemory, boundedModelHistory, createVisibleTranscript, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction, createStagingChatAuthorization, boot };
+  return { MENU, MEDIA_APPS, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, navigationKey, bindHudKeyboard, isGoogleReadRequest, isGoogleStatusRequest, isGoogleStatusFollowUp, isGoogleRetryRequest, usableGoogleRetry, googleStatusReply, googleAppHint, isGoogleFollowUp, matchesRecentGmailSubject, isConversationRecapRequest, isConversationTimelineFollowUp, createConversationMemory, boundedModelHistory, createVisibleTranscript, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, handleAppScreenKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction, createStagingChatAuthorization, boot };
 }));
