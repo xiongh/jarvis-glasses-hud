@@ -919,6 +919,9 @@
       if (!message || message.length > 1200) { view.status = 'ENTER A REQUEST OF 1 TO 1,200 CHARACTERS'; render(hud.snapshot()); return; }
       view.busy = true; view.result = ''; view.status = `READING AUTHORIZED ${screen.title}…`; render(hud.snapshot());
       try {
+        // A device capability lives in IndexedDB, not in page memory. Restore
+        // it before rejecting a launch after a Web App resume or cache reload.
+        if (!googleConnectors?.paired()) await googleAppsActions.restore();
         if (!googleConnectors?.paired()) {
           view.status = `${screen.title} NEEDS PHONE APPROVAL · OPEN CONNECT APPS`;
           return;
@@ -1284,6 +1287,10 @@
     bindHudKeyboard(globalThis.addEventListener ? globalThis : document, handleHudKeydown);
     globalThis.addEventListener?.('popstate', () => { if (youtubeState.current) leaveYoutubePlayer(); hud.back(); });
     hud.render();
+    // Restore the short-lived device capability before a Media app is opened.
+    // The renewal token stays in IndexedDB and is rotated by the relay; no
+    // Google or owner credential is exposed to this page.
+    void googleAppsActions.restore();
     void restoreYoutubeSession().catch(() => { youtubeState.sessionReady = true; youtubeState.sessionVerified = false; youtubeState.status = 'Could not verify the saved YouTube session. Check the connection and retry.'; render(hud.snapshot()); });
     return hud;
   }
