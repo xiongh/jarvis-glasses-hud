@@ -827,15 +827,17 @@
     let youtubePairTimer = null;
     let youtubePairCheckBusy = false;
     const GOOGLE_APP_SCREENS = Object.freeze({
-      gmail: { grant: 'gmail', title: 'GMAIL', placeholder: 'Search or ask about email', initial: 'SHOW MY LATEST EMAILS', suggestions: ['SHOW MY LATEST EMAILS', 'FIND UNREAD EMAIL'] },
-      calendar: { grant: 'google-calendar', title: 'CALENDAR', placeholder: 'Ask about your calendar', initial: "WHAT'S ON MY CALENDAR TODAY?", suggestions: ["WHAT'S ON MY CALENDAR TODAY?", "WHAT'S ON MY CALENDAR TOMORROW?", "WHAT'S ON MY CALENDAR NEXT WEEK?"] },
-      contacts: { grant: 'google-contacts', title: 'CONTACTS', placeholder: 'Find a contact', initial: 'SHOW RECENT CONTACTS', suggestions: ['FIND A CONTACT', 'SHOW RECENT CONTACTS'] },
-      drive: { grant: 'google-drive', title: 'DRIVE', placeholder: 'Find a file or folder', initial: 'FIND MY RECENT DRIVE FILES', suggestions: ['FIND MY RECENT DRIVE FILES', 'SHOW MY DRIVE FOLDERS'] },
-      documents: { grant: 'google-docs', title: 'DOCS', placeholder: 'Find or read a document', initial: 'SHOW MY GOOGLE DOCS', suggestions: ['FIND MY RECENT GOOGLE DOCS', 'SHOW MY GOOGLE DOCUMENTS'] },
-      sheets: { grant: 'google-sheets', title: 'SHEETS', placeholder: 'Find a spreadsheet', initial: 'SHOW MY GOOGLE SHEETS', suggestions: ['FIND MY RECENT SHEETS', 'SHOW MY GOOGLE SPREADSHEETS'] },
-      tasks: { grant: 'google-tasks', title: 'TASKS', placeholder: 'Ask about tasks', initial: 'SHOW MY UNFINISHED TASKS', suggestions: ['SHOW MY UNFINISHED TASKS', 'SHOW MY COMPLETED TASKS'] },
+      gmail: { grant: 'gmail', title: 'GMAIL', collection: 'INBOX', initial: 'SHOW MY LATEST EMAILS', itemLabel: 'EMAIL', select: (n) => `READ EMAIL ${n}` },
+      calendar: { grant: 'google-calendar', title: 'CALENDAR', collection: 'TODAY', initial: "WHAT'S ON MY CALENDAR TODAY?", itemLabel: 'EVENT', select: (n) => `SHOW CALENDAR EVENT ${n}` },
+      contacts: { grant: 'google-contacts', title: 'CONTACTS', collection: 'CONTACTS', initial: 'SHOW RECENT CONTACTS', itemLabel: 'CONTACT', select: (n) => `SHOW CONTACT ${n}` },
+      drive: { grant: 'google-drive', title: 'DRIVE', collection: 'FILES', initial: 'FIND MY RECENT DRIVE FILES', itemLabel: 'FILE', select: (n) => `OPEN FILE ${n}` },
+      documents: { grant: 'google-docs', title: 'DOCS', collection: 'DOCUMENTS', initial: 'SHOW MY GOOGLE DOCS', itemLabel: 'DOCUMENT', select: (n) => `READ DOCUMENT ${n}` },
+      sheets: { grant: 'google-sheets', title: 'SHEETS', collection: 'SPREADSHEETS', initial: 'SHOW MY GOOGLE SHEETS', itemLabel: 'SHEET', select: (n) => `READ SHEET ${n}` },
+      tasks: { grant: 'google-tasks', title: 'TASKS', collection: 'TASKS', initial: 'SHOW MY UNFINISHED TASKS', itemLabel: 'TASK', select: (n) => `SHOW TASK ${n}` },
     });
-    const googleAppViews = Object.fromEntries(Object.keys(GOOGLE_APP_SCREENS).map((id) => [id, { busy: false, status: 'RESTORING PHONE-MANAGED CONNECTION…', result: '', initialized: false }]));
+    const googleAppViews = Object.fromEntries(Object.keys(GOOGLE_APP_SCREENS).map((id) => [id, { busy: false, status: 'RESTORING PHONE-MANAGED CONNECTION…', result: '', initialized: false, detail: false, dateOffset: 0 }]));
+    const localCalendarDate = (offset = 0) => { const value = new Date(); value.setDate(value.getDate() + offset); return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`; };
+    const googleBrowseCommand = (appId, view) => appId === 'calendar' ? `WHAT'S ON MY CALENDAR FOR ${localCalendarDate(view.dateOffset)}?` : GOOGLE_APP_SCREENS[appId]?.initial || '';
     const clearYoutubeProgress = () => { if (youtubeProgressTimer) clearInterval(youtubeProgressTimer); youtubeProgressTimer = null; };
     const saveYoutubeProgress = async () => {
       if (!youtubePlayer?.active || !youtubeState.current || !youtubeRecordedStart) return;
@@ -933,12 +935,12 @@
         render(hud.snapshot());
       } finally { youtubePairCheckBusy = false; }
     };
-    const runGoogleAppCommand = async (appId, command) => {
+    const runGoogleAppCommand = async (appId, command, detail = false) => {
       const screen = GOOGLE_APP_SCREENS[appId], view = googleAppViews[appId];
       if (!screen || !view || view.busy) return;
       const message = String(command || '').trim();
-      if (!message || message.length > 1200) { view.status = 'ENTER A REQUEST OF 1 TO 1,200 CHARACTERS'; render(hud.snapshot()); return; }
-      view.busy = true; view.result = ''; view.status = `READING AUTHORIZED ${screen.title}…`; render(hud.snapshot());
+      if (!message || message.length > 1200) { view.status = `${screen.title} REQUEST IS UNAVAILABLE`; render(hud.snapshot()); return; }
+      view.busy = true; view.result = ''; view.status = detail ? `LOADING ${screen.itemLabel}…` : `LOADING ${screen.collection}…`; render(hud.snapshot());
       try {
         // A device capability lives in IndexedDB, not in page memory. Restore
         // it before rejecting a launch after a Web App resume or cache reload.
@@ -951,12 +953,13 @@
           view.status = `${screen.title} WAS NOT APPROVED FOR THIS DEVICE`;
           return;
         }
-        view.result = String(await googleConnectors.runCommand(message) || 'No matching information was found.');
+        view.result = String(await googleConnectors.runCommand(message) || 'No matching information was found.'); view.detail = detail;
         view.status = googleAppOutcomeLabel(screen.title, googleConnectors.lastResult);
       } catch (error) {
         view.status = googleAppFailureLabel(screen.title, error);
       } finally { view.busy = false; render(hud.snapshot()); }
     };
+    const loadGoogleBrowser = (appId) => { const view = googleAppViews[appId]; if (view) void runGoogleAppCommand(appId, googleBrowseCommand(appId, view), false); };
     const render = (state) => {
       outlet.classList?.toggle('youtube-mode', state.screen === 'youtube');
       outlet.replaceChildren();
@@ -1001,20 +1004,24 @@
       if (state.screen === 'google-app') {
         const app = GOOGLE_APP_SCREENS[state.mediaAppId], view = googleAppViews[state.mediaAppId];
         if (!app || !view) { hud.back(); return; }
-        if (!view.initialized) { view.initialized = true; queueMicrotask(() => { void runGoogleAppCommand(state.mediaAppId, app.initial); }); }
+        if (!view.initialized) { view.initialized = true; queueMicrotask(() => { loadGoogleBrowser(state.mediaAppId); }); }
         outlet.append(make('p', 'eyebrow', 'JARVIS APPS'), make('h1', 'detail-title', app.title));
+        const collection = make('p', 'copy', state.mediaAppId === 'calendar' ? `${view.dateOffset === 0 ? 'TODAY' : view.dateOffset > 0 ? `${view.dateOffset} DAY${view.dateOffset === 1 ? '' : 'S'} AHEAD` : `${Math.abs(view.dateOffset)} DAY${Math.abs(view.dateOffset) === 1 ? '' : 'S'} AGO`} · ${localCalendarDate(view.dateOffset)}` : app.collection); collection.dataset.googleBrowser = 'true'; outlet.append(collection);
         const status = make('p', 'status', view.status); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); outlet.append(status);
-        const form = document.createElement('form'); form.className = 'hud-youtube-search';
-        const input = document.createElement('input'); input.type = 'text'; input.maxLength = 1200; input.placeholder = app.placeholder; input.setAttribute('aria-label', `${app.title} request`); input.dataset.appFocus = 'true'; input.disabled = view.busy;
-        const submit = make('button', 'action hud-youtube-search-button', 'READ'); submit.type = 'submit'; submit.dataset.appFocus = 'true'; submit.disabled = view.busy;
-        form.addEventListener('submit', (event) => { event.preventDefault(); void runGoogleAppCommand(state.mediaAppId, input.value); }); form.append(input, submit); outlet.append(form);
-        const suggestions = make('div', 'hud-youtube-nav', ''); suggestions.setAttribute('aria-label', `${app.title} suggestions`);
-        app.suggestions.forEach((suggestion) => { const button = make('button', 'action hud-youtube-tab', suggestion); button.type = 'button'; button.dataset.appFocus = 'true'; button.disabled = view.busy; button.addEventListener('click', () => { void runGoogleAppCommand(state.mediaAppId, suggestion); }); suggestions.append(button); }); outlet.append(suggestions);
+        const controls = make('div', 'hud-youtube-nav', ''); controls.setAttribute('aria-label', `${app.title} browser controls`);
+        const addControl = (label, action) => { const button = make('button', 'action hud-youtube-tab', label); button.type = 'button'; button.dataset.appFocus = 'true'; button.disabled = view.busy; button.addEventListener('click', action); controls.append(button); return button; };
+        if (state.mediaAppId === 'calendar') {
+          addControl('PREVIOUS DAY', () => { view.dateOffset -= 1; loadGoogleBrowser(state.mediaAppId); });
+          addControl('TODAY', () => { view.dateOffset = 0; loadGoogleBrowser(state.mediaAppId); });
+          addControl('NEXT DAY', () => { view.dateOffset += 1; loadGoogleBrowser(state.mediaAppId); });
+        }
+        if (view.detail) addControl(`BACK TO ${app.collection}`, () => { view.detail = false; loadGoogleBrowser(state.mediaAppId); });
+        addControl('REFRESH', () => { if (view.detail) { view.detail = false; } loadGoogleBrowser(state.mediaAppId); });
+        outlet.append(controls);
         if (view.result) {
           const result = make('pre', 'copy', view.result); result.setAttribute('aria-label', `${app.title} read-only result`); outlet.append(result);
           const numbered = [...view.result.matchAll(/^\s*(\d{1,2})\.\s+.+$/gm)].map((match) => Number(match[1])).filter((number, index, values) => number >= 1 && number <= 10 && values.indexOf(number) === index);
-          const selectCommand = { gmail: (n) => `READ EMAIL ${n}`, calendar: (n) => `SHOW CALENDAR EVENT ${n}`, contacts: (n) => `SHOW CONTACT ${n}`, drive: (n) => `OPEN FILE ${n}`, documents: (n) => `READ DOCUMENT ${n}`, sheets: (n) => `READ SHEET ${n}`, tasks: (n) => `SHOW TASK ${n}` }[state.mediaAppId];
-          if (selectCommand && numbered.length) { const choices = make('div', 'hud-youtube-nav', ''); choices.setAttribute('aria-label', `${app.title} result selection`); numbered.forEach((number) => { const button = make('button', 'action hud-youtube-tab', `OPEN ${number}`); button.type = 'button'; button.dataset.appFocus = 'true'; button.disabled = view.busy; button.addEventListener('click', () => { void runGoogleAppCommand(state.mediaAppId, selectCommand(number)); }); choices.append(button); }); outlet.append(choices); }
+          if (!view.detail && numbered.length) { const choices = make('div', 'hud-youtube-nav', ''); choices.setAttribute('aria-label', `${app.title} item selection`); numbered.forEach((number) => { const button = make('button', 'action hud-youtube-tab', `${app.itemLabel} ${number}`); button.type = 'button'; button.dataset.appFocus = 'true'; button.disabled = view.busy; button.addEventListener('click', () => { void runGoogleAppCommand(state.mediaAppId, app.select(number), true); }); choices.append(button); }); outlet.append(choices); }
         }
         outlet.append(make('p', 'copy hud-youtube-help', 'READ-ONLY · CONNECTIONS AND ACCOUNT MANAGEMENT STAY IN THE JARVIS PHONE APP'));
         const backButton = make('button', 'action', 'BACK TO MEDIA'); backButton.type = 'button'; backButton.dataset.appFocus = 'true'; backButton.addEventListener('click', () => hud.back()); outlet.append(backButton); return;
