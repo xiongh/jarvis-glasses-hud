@@ -97,6 +97,27 @@
     if (app) return `${label} is authorized and enabled for read-only JARVIS requests. This confirms authorization, not current Gmail/Google API availability. No Google read was sent.`;
     return `Google Apps authorization is active for ${enabled.size} approved read-only app${enabled.size === 1 ? '' : 's'}. No Google read was sent.`;
   }
+  // These labels intentionally contain no provider text, account data, IDs,
+  // tokens, or URLs. They let the glasses distinguish a device approval
+  // problem from the sanctioned Worker result for a real empty calendar.
+  function googleAppOutcomeLabel(title, outcome) {
+    const status = String(outcome?.status || 'completed');
+    if (status === 'empty') return title === 'CALENDAR' ? 'CALENDAR · NO EVENTS FOR THIS DAY' : `${title} · NO MATCHING RESULTS`;
+    if (status === 'reconnect_required') return `${title} NEEDS GOOGLE RECONNECT · OPEN CONNECTIONS ON PHONE`;
+    if (status === 'not_authorized') return `${title} WAS NOT APPROVED FOR THIS DEVICE`;
+    if (status === 'scope_denied' || status === 'permission_denied') return `${title} GOOGLE PERMISSION NEEDS RECONNECT · OPEN CONNECTIONS ON PHONE`;
+    if (status === 'api_unavailable') return `${title} GOOGLE SERVICE IS UNAVAILABLE · RETRY LATER`;
+    if (status === 'temporary_error') return `${title} TEMPORARILY UNAVAILABLE · RETRY`;
+    return `${title} · READ-ONLY · COMPLETE`;
+  }
+  function googleAppFailureLabel(title, error) {
+    if (error?.status === 401) return `${title} PHONE APPROVAL EXPIRED OR REVOKED · APPROVE AGAIN ON PHONE`;
+    if (error?.status === 403) return `${title} REQUEST DENIED BY STAGING POLICY · RELOAD THEN RETRY`;
+    if (error?.status === 429) return `${title} REQUEST LIMIT REACHED · WAIT THEN RETRY`;
+    if (error?.category === 'network-timeout') return `${title} NETWORK TIMED OUT · RETRY`;
+    if (error?.category === 'network-unreachable') return `${title} NETWORK UNAVAILABLE · CHECK CONNECTION THEN RETRY`;
+    return `${title} COULD NOT BE READ · RETRY`;
+  }
   function isConversationRecapRequest(value) {
     const text = String(value || '').normalize('NFKC').toLowerCase();
     return /\b(?:summari[sz](?:e|es)|summeri[sz](?:e|es)|recap)\b/.test(text) && /\b(?:we|conversation|chat|talked|discussed|just)\b/.test(text);
@@ -931,9 +952,9 @@
           return;
         }
         view.result = String(await googleConnectors.runCommand(message) || 'No matching information was found.');
-        view.status = `${screen.title} · READ-ONLY · COMPLETE`;
+        view.status = googleAppOutcomeLabel(screen.title, googleConnectors.lastResult);
       } catch (error) {
-        view.status = `${screen.title} COULD NOT BE READ · TRY AGAIN`;
+        view.status = googleAppFailureLabel(screen.title, error);
       } finally { view.busy = false; render(hud.snapshot()); }
     };
     const render = (state) => {
@@ -1307,5 +1328,5 @@
     }
     boot(document);
   }, { once: true });
-  return { MENU, MEDIA_APPS, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, navigationKey, bindHudKeyboard, isGoogleReadRequest, isGoogleStatusRequest, isGoogleStatusFollowUp, isGoogleRetryRequest, usableGoogleRetry, googleStatusReply, googleAppHint, isGoogleFollowUp, matchesRecentGmailSubject, isConversationRecapRequest, isConversationTimelineFollowUp, createConversationMemory, boundedModelHistory, createVisibleTranscript, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, handleAppScreenKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction, createStagingChatAuthorization, boot };
+  return { MENU, MEDIA_APPS, createHud, createRequestGate, createYouTubeClient, normalizeBackendOrigin, navigationKey, bindHudKeyboard, isGoogleReadRequest, isGoogleStatusRequest, isGoogleStatusFollowUp, isGoogleRetryRequest, usableGoogleRetry, googleStatusReply, googleAppOutcomeLabel, googleAppFailureLabel, googleAppHint, isGoogleFollowUp, matchesRecentGmailSubject, isConversationRecapRequest, isConversationTimelineFollowUp, createConversationMemory, boundedModelHistory, createVisibleTranscript, registerHudUpdates, handleUpdateControlsKey, shouldWaitForSession, handleConnectAppsKey, handleAppScreenKey, createGoogleAppsActions, createOwnerAppsClient, bindConnectAppsAction, createStagingChatAuthorization, boot };
 }));

@@ -160,6 +160,21 @@ test('device capability stays in memory, commands use only relay routes, and rev
   assert.equal(calls.some((call) => /googleapis\.com|oauth|callback/i.test(call.url)), false);
 });
 
+test('device command retains only the sanitized Worker outcome needed for glasses diagnostics', async () => {
+  const now = 4_000_000;
+  const client = createGoogleConnectorClient({ workerOrigin: 'https://relay.example.workers.dev', enabled: true, now: () => now,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/v1/hud/pairings')) return response(201, pairing(now));
+      if (String(url).endsWith('/v1/hud/pairings/poll')) return response(200, { status: 'paired', deviceId: `hud_${'a'.repeat(32)}`, accessToken: 'b'.repeat(64), renewalToken: 'c'.repeat(64), expiresAt: now + 900_000, deviceExpiresAt: now + 30 * 86400000, apps: ['google-calendar'] });
+      if (String(url).endsWith('/v1/hud/commands')) return response(200, { status: 'complete', result: { content: 'Google Apps needs to be reconnected by the account owner.', status: 'reconnect_required', diagnostic: { stage: 'provider-read', category: 'provider-http', providerStatus: 401 }, privateField: 'must not persist' } });
+      throw new Error('Unexpected route.');
+    } });
+  await client.startPairing(['google-calendar']); await client.pollPairing();
+  assert.equal(await client.runCommand("WHAT'S ON MY CALENDAR TODAY?"), 'Google Apps needs to be reconnected by the account owner.');
+  assert.deepEqual(client.lastResult, { status: 'reconnect_required', diagnostic: { stage: 'provider-read', category: 'provider-http', providerStatus: 401 } });
+  client.clear(); assert.equal(client.lastResult, null);
+});
+
 test('Google device approval survives client recreation with a rotated renewable capability',async()=>{
   const now=1_000_000,record=new Map(),storage={read:async key=>record.get(key),write:async value=>record.set(value.workerOrigin,value),remove:async key=>record.delete(key)};
   let renewals=0;const deviceId=`hud_${'f'.repeat(32)}`,accessA='a'.repeat(64),accessB='b'.repeat(64),renewalA='c'.repeat(64),renewalB='d'.repeat(64),deviceExpiresAt=now+30*86400000;
