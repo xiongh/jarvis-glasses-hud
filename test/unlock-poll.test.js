@@ -105,9 +105,11 @@ test('an active glasses UI locks itself when the phone session is revoked', asyn
     json(401, { authorized: false }),
   ], { sessionRestore: true });
   await new Promise(setImmediate);
-  const watch = h.timers.find((timer) => timer.delay === 30_000 && !timer.cleared);
-  assert.ok(watch, 'an unlocked display keeps a bounded server authorization watch');
+  const watch = h.timers.find((timer) => timer.delay === 3_000 && !timer.cleared);
+  assert.ok(watch, 'an unlocked display checks the phone session within three seconds');
   watch.handler(); await new Promise(setImmediate);
+  assert.match(h.calls[1].url, /\/v1\/hud\/session\/status$/);
+  assert.equal(h.calls[1].options.headers['X-Jarvis-HUD'], 'status');
   assert.equal(h.lock.hidden, false); assert.equal(h.app.inert, true); assert.match(h.status.textContent, /phone session ended/i);
 });
 

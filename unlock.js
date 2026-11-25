@@ -19,7 +19,12 @@
     try { const url = new URL(config.workerUrl); return url.protocol === 'https:' && url.origin === config.workerUrl.replace(/\/$/, '') && url.hostname.endsWith('.workers.dev') ? url.origin : ''; } catch { return ''; }
   }
   async function request(fetchImpl, worker, path, body, options = {}) {
-    const response = await fetchImpl(`${worker}${path}`, { method: options.method || 'POST', mode: 'cors', credentials: options.credentials || 'omit', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body || {}) }) });
+    const controller = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0 && typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), options.timeoutMs) : null;
+    let response;
+    try { response = await fetchImpl(`${worker}${path}`, { method: options.method || 'POST', mode: 'cors', credentials: options.credentials || 'omit', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...(controller ? { signal: controller.signal } : {}), ...(body === undefined ? {} : { body: JSON.stringify(body || {}) }) }); }
+    catch (cause) { const error = new Error(controller?.signal.aborted ? 'JARVIS authorization check timed out.' : 'JARVIS authorization request could not be completed.'); error.cause = cause; throw error; }
+    finally { if (timer !== null) clearTimeout(timer); }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) { const error = new Error(data.error || 'JARVIS approval request failed.'); error.status = response.status; const retryAfter = Number(response.headers?.get?.('Retry-After')); if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterMs = retryAfter * 1000; throw error; }
     return data;
@@ -82,7 +87,7 @@
     if (!lock || !app) return null;
     const title = documentObject.getElementById('lock-title'); const status = documentObject.getElementById('lock-status'); const code = documentObject.getElementById('lock-code'); const retry = documentObject.getElementById('lock-retry'); const faceId = documentObject.getElementById('lock-face-id'); const phoneUnlock = documentObject.getElementById('lock-phone-unlock'); const manualLock = documentObject.getElementById('hud-lock'); const diagnostics = documentObject.getElementById('hud-auth-diagnostics');
     const worker = trustedWorker(windowObject.JARVIS_AUTH_CONFIG, windowObject.location);
-    const POLL_INTERVAL_MS = 6_000; const POLL_BACKOFF_MIN_MS = 10_000; const POLL_BACKOFF_MAX_MS = 30_000; const SESSION_WATCH_INTERVAL_MS = 30_000;
+    const POLL_INTERVAL_MS = 6_000; const POLL_BACKOFF_MIN_MS = 10_000; const POLL_BACKOFF_MAX_MS = 30_000; const SESSION_WATCH_INTERVAL_MS = 3_000;
     let timer = null; let expiryTimer = null; let sessionTimer = null; let sessionGeneration = 0; let expiry = 0; let generation = 0; let busy = false; let unlocked = false; let pollInFlight = false; let pollDelay = POLL_INTERVAL_MS; let restoreInFlight = null;
     // A refresh may briefly dispatch visibilitychange while the browser is
     // restoring its page.  That must not classify a still-valid cookie as
@@ -104,7 +109,7 @@
     const stopSessionWatch = () => { sessionGeneration += 1; if (sessionTimer !== null) clearTimer(sessionTimer); sessionTimer = null; };
     const setLocked = (message) => { const wasUnlocked = unlocked; stopSessionWatch(); unlocked = false; expiry = 0; if (expiryTimer !== null) clearTimer(expiryTimer); expiryTimer = null; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'locked'; code.hidden = true; if (title) title.textContent = 'LOCKED'; if (message) say(message); retry?.focus?.(); if (wasUnlocked) documentObject.dispatchEvent(new windowObject.Event('jarvis-session-locked')); };
     const scheduleSessionWatch = (run, delay = SESSION_WATCH_INTERVAL_MS) => { if (run !== sessionGeneration || !unlocked) return; if (sessionTimer !== null) clearTimer(sessionTimer); sessionTimer = setTimer(() => { sessionTimer = null; void verifySession(run); }, delay); };
-    const verifySession = async (run = sessionGeneration) => { if (run !== sessionGeneration || !unlocked || !worker) return; try { const result = await request(fetchImpl, worker, '/v1/hud/session/restore', {}, { credentials: 'include', headers: { 'X-Jarvis-HUD': 'restore' } }); if (run !== sessionGeneration) return; if (result.authorized !== true || !Number.isSafeInteger(result.expiresAt)) throw new Error('Session restoration was invalid.'); expiry = result.expiresAt * 1000; scheduleSessionWatch(run); } catch (error) { if (run !== sessionGeneration) return; if (error?.status === 401) { stop(); setLocked('Your phone session ended. Unlock again with your iPhone.'); } else scheduleSessionWatch(run); } };
+    const verifySession = async (run = sessionGeneration) => { if (run !== sessionGeneration || !unlocked || !worker) return; try { const result = await request(fetchImpl, worker, '/v1/hud/session/status', {}, { credentials: 'include', timeoutMs: 2_000, headers: { 'X-Jarvis-HUD': 'status' } }); if (run !== sessionGeneration) return; if (result.authorized !== true || !Number.isSafeInteger(result.expiresAt)) throw new Error('Session validation was invalid.'); expiry = result.expiresAt * 1000; scheduleSessionWatch(run); } catch (error) { if (run !== sessionGeneration) return; if (error?.status === 401) { stop(); setLocked('Your phone session ended. Unlock again with your iPhone.'); } else scheduleSessionWatch(run); } };
     const startSessionWatch = () => { stopSessionWatch(); scheduleSessionWatch(sessionGeneration); };
     const unlock = (expiresAt) => { if (expiryTimer !== null) clearTimer(expiryTimer); unlocked = true; expiry = expiresAt * 1000; lock.hidden = true; app.inert = false; documentObject.body.dataset.jarvisSession = 'authenticated'; documentObject.dispatchEvent(new windowObject.Event('jarvis-session-unlocked')); expiryTimer = setTimer(() => { if (unlocked) setLocked('Your JARVIS session expired. Approve again on your iPhone.'); }, Math.max(0, expiry - now())); startSessionWatch(); };
     const stop = () => { generation++; if (timer !== null) clearTimer(timer); timer = null; busy = false; pollDelay = POLL_INTERVAL_MS; };
@@ -154,7 +159,7 @@
         // The host-only, HttpOnly registered-glasses cookie lives on the Auth
         // Worker origin.  The initial request must include it; otherwise a
         // valid association is indistinguishable from an unregistered device.
-        const value = await request(fetchImpl, worker, '/v1/glasses/unlock/start', {}, { credentials: 'include' });
+        const value = await request(fetchImpl, worker, '/v1/glasses/unlock/start', {}, { credentials: 'include', timeoutMs: 2_000 });
         if (run !== generation) return false;
         if (!/^[A-Za-z0-9_-]{24}$/.test(value.transactionId || '') || !/^[A-Za-z0-9_-]{43}$/.test(value.pollSecret || '') || !Number.isSafeInteger(value.expiresAt) || (value.automatic !== true && !/^\d{8}$/.test(value.code || ''))) throw new Error('Unlock request was invalid.');
         if (value.automatic === true) {
@@ -176,7 +181,7 @@
       if (!worker) { diagnose({ restore: 'not-configured' }); setLocked('Session check could not run. Unlock again with your iPhone.'); return false; }
       try {
         diagnose({ restore: 'requested' });
-        const result = await request(fetchImpl, worker, '/v1/hud/session/restore', {}, { credentials: 'include', headers: { 'X-Jarvis-HUD': 'restore' } });
+        const result = await request(fetchImpl, worker, '/v1/hud/session/restore', {}, { credentials: 'include', timeoutMs: 2_000, headers: { 'X-Jarvis-HUD': 'restore' } });
         if (result.authorized !== true || !Number.isSafeInteger(result.expiresAt) || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(result.assertion || '') || !Number.isSafeInteger(result.assertionExpiresAt)) throw new Error('Session restoration was invalid.');
         diagnose({ restore: result.session === 'restored' ? 'restored' : 'response-missing-marker' });
         unlock(result.expiresAt);

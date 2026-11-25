@@ -10,7 +10,7 @@ const { join, normalize, extname } = require('node:path');
 const { chromium } = require(require.resolve('playwright', { paths: [process.cwd()] }));
 const root = join(__dirname, '..');
 const types = { '.css': 'text/css', '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
-const fakeConnectors = `window.jarvisGoogleConnectors={normalizeCompanionUrl:()=>'',createGoogleConnectorClient:()=>{let lastResult=null;return{available:()=>true,paired:()=>true,get apps(){return['gmail','google-calendar','google-contacts','google-drive','google-docs','google-sheets','google-tasks']},get lastResult(){return lastResult},restore:async()=>({paired:true,storageAvailable:true,apps:['gmail','google-calendar','google-contacts','google-drive','google-docs','google-sheets','google-tasks']}),runCommand:async(command)=>{lastResult={status:'completed'};const value=String(command);if(/SHOW CALENDAR EVENT/.test(value))return 'Planning\\nToday at 10:00 AM\\nTeam review';if(/CALENDAR/.test(value))return '1. Planning — Today at 10:00 AM';if(/READ EMAIL/.test(value))return 'Quarterly update\\nFrom: Team\\nRead-only message preview';if(/EMAILS/.test(value))return '1. Quarterly update — Team';if(/SHOW CONTACT/.test(value))return 'Taylor Example\\ntaylor@example.test';if(/CONTACT/.test(value))return '1. Taylor Example — taylor@example.test';if(/OPEN FILE/.test(value))return 'Project plan\\nSupported file details';if(/DRIVE/.test(value))return '1. Project plan — Drive file';if(/READ DOCUMENT/.test(value))return 'Project brief\\nReadable document content';if(/DOC/.test(value))return '1. Project brief — Google Doc';if(/READ SHEET/.test(value))return 'Budget\\nReadable spreadsheet content';if(/SHEET/.test(value))return '1. Budget — Google Sheet';if(/SHOW TASK/.test(value))return 'Review proposal\\nDue today';return '1. Review proposal — Due today';}}}};`;
+const fakeConnectors = `window.jarvisGoogleConnectors={normalizeCompanionUrl:()=>'',createGoogleConnectorClient:()=>{let lastResult=null,paired=!location.search.includes('unpaired'),polls=0;const apps=['gmail','google-calendar','google-contacts','google-drive','google-docs','google-sheets','google-tasks'];return{available:()=>true,paired:()=>paired,get apps(){return apps},get lastResult(){return lastResult},restore:async()=>({paired,storageAvailable:true,apps:paired?apps:[]}),startPairing:async()=>{window.__googlePairStarts=(window.__googlePairStarts||0)+1;return{pairingAlias:'K7M2Q9',userCode:'01234567'}},pollPairing:async()=>{window.__googlePairPolls=(window.__googlePairPolls||0)+1;if(++polls<2)return{paired:false};paired=true;return{paired:true,persistent:true,apps}},runCommand:async(command)=>{lastResult={status:'completed'};const value=String(command);if(/SHOW CALENDAR EVENT/.test(value))return 'Planning\\nToday at 10:00 AM\\nTeam review';if(/CALENDAR/.test(value))return '1. Planning — Today at 10:00 AM';if(/READ EMAIL/.test(value))return 'Quarterly update\\nFrom: Team\\nRead-only message preview';if(/EMAILS/.test(value))return '1. Quarterly update — Team';if(/SHOW CONTACT/.test(value))return 'Taylor Example\\ntaylor@example.test';if(/CONTACT/.test(value))return '1. Taylor Example — taylor@example.test';if(/OPEN FILE/.test(value))return 'Project plan\\nSupported file details';if(/DRIVE/.test(value))return '1. Project plan — Drive file';if(/READ DOCUMENT/.test(value))return 'Project brief\\nReadable document content';if(/DOC/.test(value))return '1. Project brief — Google Doc';if(/READ SHEET/.test(value))return 'Budget\\nReadable spreadsheet content';if(/SHEET/.test(value))return '1. Budget — Google Sheet';if(/SHOW TASK/.test(value))return 'Review proposal\\nDue today';return '1. Review proposal — Due today';}}}};`;
 
 async function main() {
   const server = createServer((request, response) => {
@@ -52,6 +52,16 @@ async function main() {
       await page.getByText(detail).waitFor();
       await page.getByRole('button', { name: 'BACK TO MEDIA' }).click();
     }
+    const pending = await browser.newPage({ viewport: { width: 600, height: 600 } });
+    await pending.goto(`http://127.0.0.1:${server.address().port}/?unpaired=1`, { waitUntil: 'networkidle' });
+    await pending.getByRole('button', { name: 'OPEN JARVIS MENU' }).click();
+    await pending.getByRole('button', { name: /^MEDIA/ }).click();
+    await pending.locator('button[data-media-app="calendar"]').click();
+    await pending.getByText('PAIRING ID · K7M2Q9').waitFor();
+    await pending.getByRole('button', { name: 'EVENT 1' }).waitFor({ timeout: 4000 });
+    assert.equal(await pending.evaluate(() => window.__googlePairStarts), 1, 'opening Calendar starts one scoped device pairing');
+    assert.ok(await pending.evaluate(() => window.__googlePairPolls) >= 2, 'the HUD consumes approval without a separate Check button');
+    await pending.close();
     assert.deepEqual(errors, [], `uncaught browser errors: ${errors.join('; ')}`);
     process.stdout.write(JSON.stringify({ result: 'passed', apps: apps.length }) + '\n');
   } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }

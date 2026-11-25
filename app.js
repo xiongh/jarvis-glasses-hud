@@ -636,7 +636,7 @@
       },
       async startPairing() {
         state.busy = true; state.status = 'Creating a short-lived pairing request…'; redraw();
-        try { state.pairing = await connector.startPairing(); state.status = 'Approve this pairing in Apps & Connections on your iPhone.'; }
+        try { state.pairing = await connector.startPairing(); state.status = 'Approve this pairing in Apps & Connections on your iPhone.'; return state.pairing; }
         catch (error) { state.status = error.message || 'Could not start pairing.'; }
         finally { state.busy = false; redraw(); }
       },
@@ -646,6 +646,7 @@
           const value = await connector.pollPairing();
           state.status = value.paired ? value.persistent ? `Connected: ${value.apps.join(', ')}. Approval expires after 30 days.` : `Connected for this session: ${value.apps.join(', ')}. Browser storage is unavailable; approval lasts at most 15 minutes.` : 'Waiting for owner approval on the phone.';
           if (value.paired) state.pairing = null;
+          return value;
         } catch (error) { state.status = error.message || 'Pairing check failed.'; }
         finally { state.busy = false; redraw(); }
       },
@@ -826,6 +827,8 @@
     let youtubeRecordedStart = false;
     let youtubePairTimer = null;
     let youtubePairCheckBusy = false;
+    let googlePairTimer = null;
+    let googlePairCheckBusy = false;
     const GOOGLE_APP_SCREENS = Object.freeze({
       gmail: { grant: 'gmail', title: 'GMAIL', collection: 'INBOX', initial: 'SHOW MY LATEST EMAILS', itemLabel: 'EMAIL', select: (n) => `READ EMAIL ${n}` },
       calendar: { grant: 'google-calendar', title: 'CALENDAR', collection: 'TODAY', initial: "WHAT'S ON MY CALENDAR TODAY?", itemLabel: 'EVENT', select: (n) => `SHOW CALENDAR EVENT ${n}` },
@@ -935,6 +938,34 @@
         render(hud.snapshot());
       } finally { youtubePairCheckBusy = false; }
     };
+    const stopGooglePairingWatch = () => { if (googlePairTimer) clearInterval(googlePairTimer); googlePairTimer = null; };
+    const checkGooglePairing = async () => {
+      if (googlePairCheckBusy || !googleConnectorState.pairing) return;
+      googlePairCheckBusy = true;
+      try {
+        const result = await googleAppsActions.pollPairing();
+        if (!result?.paired) return;
+        stopGooglePairingWatch();
+        // The fresh capability stays only in the display runtime and its
+        // encrypted device store. Re-run the current direct browser request;
+        // no GLM prompt or owner-session read is involved.
+        if (hud.snapshot().screen === 'google-app') {
+          const appId = hud.snapshot().mediaAppId;
+          const view = googleAppViews[appId];
+          if (view) void runGoogleAppCommand(appId, googleBrowseCommand(appId, view), view.detail);
+        }
+      } finally { googlePairCheckBusy = false; }
+    };
+    const beginGooglePairing = async () => {
+      if (googleConnectorState.pairing || googleConnectorState.busy) return;
+      const pairing = await googleAppsActions.startPairing();
+      if (!pairing || !googleConnectorState.pairing) return;
+      stopGooglePairingWatch();
+      // Short-lived pairings are polled only while one is on screen. This
+      // consumes no Google API quota and stops as soon as approval arrives.
+      googlePairTimer = setInterval(() => { void checkGooglePairing(); }, 1000);
+      void checkGooglePairing();
+    };
     const runGoogleAppCommand = async (appId, command, detail = false) => {
       const screen = GOOGLE_APP_SCREENS[appId], view = googleAppViews[appId];
       if (!screen || !view || view.busy) return;
@@ -946,7 +977,10 @@
         // it before rejecting a launch after a Web App resume or cache reload.
         if (!googleConnectors?.paired()) await googleAppsActions.restore();
         if (!googleConnectors?.paired()) {
-          view.status = `${screen.title} NEEDS PHONE APPROVAL · OPEN CONNECT APPS`;
+          await beginGooglePairing();
+          view.status = googleConnectorState.pairing
+            ? `${screen.title} AWAITS PHONE APPROVAL · ENTER THE PAIRING ID AND CODE ON CONNECTIONS`
+            : `${screen.title} NEEDS PHONE APPROVAL · OPEN CONNECT APPS`;
           return;
         }
         if (!googleConnectors.apps.includes(screen.grant)) {
@@ -1008,6 +1042,13 @@
         outlet.append(make('p', 'eyebrow', 'JARVIS APPS'), make('h1', 'detail-title', app.title));
         const collection = make('p', 'copy', state.mediaAppId === 'calendar' ? `${view.dateOffset === 0 ? 'TODAY' : view.dateOffset > 0 ? `${view.dateOffset} DAY${view.dateOffset === 1 ? '' : 'S'} AHEAD` : `${Math.abs(view.dateOffset)} DAY${Math.abs(view.dateOffset) === 1 ? '' : 'S'} AGO`} · ${localCalendarDate(view.dateOffset)}` : app.collection); collection.dataset.googleBrowser = 'true'; outlet.append(collection);
         const status = make('p', 'status', view.status); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); outlet.append(status);
+        if (googleConnectorState.pairing) {
+          const pairing = make('section', 'google-device-approval', '');
+          pairing.append(make('p', 'copy', 'Phone approval is required once for this glasses device. Open Connections on your phone and enter both values below.'));
+          pairing.append(make('p', 'copy', `PAIRING ID · ${googleConnectorState.pairing.pairingAlias}`));
+          const pairingCode = make('h2', 'hud-youtube-pair-code', googleConnectorState.pairing.userCode); pairingCode.setAttribute('role', 'status'); pairingCode.setAttribute('aria-live', 'polite'); pairing.append(pairingCode);
+          outlet.append(pairing);
+        }
         const controls = make('div', 'hud-youtube-nav', ''); controls.setAttribute('aria-label', `${app.title} browser controls`);
         const addControl = (label, action) => { const button = make('button', 'action hud-youtube-tab', label); button.type = 'button'; button.dataset.appFocus = 'true'; button.disabled = view.busy; button.addEventListener('click', action); controls.append(button); return button; };
         if (state.mediaAppId === 'calendar') {
