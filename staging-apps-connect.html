@@ -36,6 +36,14 @@
         </fieldset>
         <p><button id="staging-google-connect" class="action" type="button">CONNECT GOOGLE</button>
           <button id="staging-google-disconnect" class="action" type="button">DISCONNECT GOOGLE</button></p>
+        <section id="staging-glasses-approval">
+          <h3>Glasses access</h3>
+          <p id="staging-glasses-summary" role="status" aria-live="polite">Google account authorization and glasses device approval are separate.</p>
+          <p>On the glasses, open Connect Apps and select Start Phone Approval. Enter its pairing ID and code here to approve only the checked, already-authorized apps. This does not open Google sign-in.</p>
+          <label>Pairing ID <input id="staging-glasses-pairing-id" inputmode="text" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" /></label>
+          <label>Eight-digit code <input id="staging-glasses-pairing-code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="one-time-code" /></label>
+          <button id="staging-glasses-approve" class="action" type="button">APPROVE GLASSES ACCESS</button>
+        </section>
       </section>
       <section id="staging-youtube-section" hidden>
         <h2>YouTube</h2>

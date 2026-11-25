@@ -87,6 +87,30 @@ test('a rejected restoration stays locked and cannot synthesize an authorization
   assert.match(h.status.textContent, /iPhone/i);
 });
 
+test('a rejected restore immediately creates one fresh companion approval request', async () => {
+  const h = harness([
+    json(401, { authorized: false }),
+    json(201, { transactionId, pollSecret, code: '12345678', expiresAt: 1_100 }),
+    json(200, { unlocked: false, pending: true, expiresAt: 1_100 }),
+  ], { sessionRestore: true });
+  await new Promise(setImmediate);
+  assert.equal(h.calls.length, 3, 'restore failure must not require a manual retry before companion polling begins');
+  assert.match(h.calls[1].url, /\/v1\/glasses\/unlock\/start$/);
+  assert.match(h.calls[2].url, /\/v1\/glasses\/unlock\/poll$/);
+});
+
+test('an active glasses UI locks itself when the phone session is revoked', async () => {
+  const h = harness([
+    json(200, { authorized: true, expiresAt: 2_800, assertion: 'x.y.z', assertionExpiresAt: 1_120 }),
+    json(401, { authorized: false }),
+  ], { sessionRestore: true });
+  await new Promise(setImmediate);
+  const watch = h.timers.find((timer) => timer.delay === 30_000 && !timer.cleared);
+  assert.ok(watch, 'an unlocked display keeps a bounded server authorization watch');
+  watch.handler(); await new Promise(setImmediate);
+  assert.equal(h.lock.hidden, false); assert.equal(h.app.inert, true); assert.match(h.status.textContent, /phone session ended/i);
+});
+
 test('display runtimes with a false online hint still restore and create companion approval requests', async () => {
   const restored = harness([
     json(200, { authorized: true, session: 'restored', expiresAt: 2_800, assertion: 'x.y.z', assertionExpiresAt: 1_120 }),

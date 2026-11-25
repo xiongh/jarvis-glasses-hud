@@ -82,8 +82,8 @@
     if (!lock || !app) return null;
     const title = documentObject.getElementById('lock-title'); const status = documentObject.getElementById('lock-status'); const code = documentObject.getElementById('lock-code'); const retry = documentObject.getElementById('lock-retry'); const faceId = documentObject.getElementById('lock-face-id'); const phoneUnlock = documentObject.getElementById('lock-phone-unlock'); const manualLock = documentObject.getElementById('hud-lock'); const diagnostics = documentObject.getElementById('hud-auth-diagnostics');
     const worker = trustedWorker(windowObject.JARVIS_AUTH_CONFIG, windowObject.location);
-    const POLL_INTERVAL_MS = 6_000; const POLL_BACKOFF_MIN_MS = 10_000; const POLL_BACKOFF_MAX_MS = 30_000;
-    let timer = null; let expiryTimer = null; let expiry = 0; let generation = 0; let busy = false; let unlocked = false; let pollInFlight = false; let pollDelay = POLL_INTERVAL_MS; let restoreInFlight = null;
+    const POLL_INTERVAL_MS = 6_000; const POLL_BACKOFF_MIN_MS = 10_000; const POLL_BACKOFF_MAX_MS = 30_000; const SESSION_WATCH_INTERVAL_MS = 30_000;
+    let timer = null; let expiryTimer = null; let sessionTimer = null; let sessionGeneration = 0; let expiry = 0; let generation = 0; let busy = false; let unlocked = false; let pollInFlight = false; let pollDelay = POLL_INTERVAL_MS; let restoreInFlight = null;
     // A refresh may briefly dispatch visibilitychange while the browser is
     // restoring its page.  That must not classify a still-valid cookie as
     // locked before the server-side restore request has answered.
@@ -101,8 +101,12 @@
     };
     const diagnose = (changes) => { Object.assign(diagnosticState, changes); report(); };
     const setChecking = (message = 'Checking your secure JARVIS session…') => { unlocked = false; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'checking_session'; code.hidden = true; if (title) title.textContent = 'CHECKING SESSION'; say(message); };
-    const setLocked = (message) => { const wasUnlocked = unlocked; unlocked = false; expiry = 0; if (expiryTimer !== null) clearTimer(expiryTimer); expiryTimer = null; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'locked'; code.hidden = true; if (title) title.textContent = 'LOCKED'; if (message) say(message); retry?.focus?.(); if (wasUnlocked) documentObject.dispatchEvent(new windowObject.Event('jarvis-session-locked')); };
-    const unlock = (expiresAt) => { if (expiryTimer !== null) clearTimer(expiryTimer); unlocked = true; expiry = expiresAt * 1000; lock.hidden = true; app.inert = false; documentObject.body.dataset.jarvisSession = 'authenticated'; documentObject.dispatchEvent(new windowObject.Event('jarvis-session-unlocked')); expiryTimer = setTimer(() => { if (unlocked) setLocked('Your JARVIS session expired. Approve again on your iPhone.'); }, Math.max(0, expiry - now())); };
+    const stopSessionWatch = () => { sessionGeneration += 1; if (sessionTimer !== null) clearTimer(sessionTimer); sessionTimer = null; };
+    const setLocked = (message) => { const wasUnlocked = unlocked; stopSessionWatch(); unlocked = false; expiry = 0; if (expiryTimer !== null) clearTimer(expiryTimer); expiryTimer = null; lock.hidden = false; app.inert = true; documentObject.body.dataset.jarvisSession = 'locked'; code.hidden = true; if (title) title.textContent = 'LOCKED'; if (message) say(message); retry?.focus?.(); if (wasUnlocked) documentObject.dispatchEvent(new windowObject.Event('jarvis-session-locked')); };
+    const scheduleSessionWatch = (run, delay = SESSION_WATCH_INTERVAL_MS) => { if (run !== sessionGeneration || !unlocked) return; if (sessionTimer !== null) clearTimer(sessionTimer); sessionTimer = setTimer(() => { sessionTimer = null; void verifySession(run); }, delay); };
+    const verifySession = async (run = sessionGeneration) => { if (run !== sessionGeneration || !unlocked || !worker) return; try { const result = await request(fetchImpl, worker, '/v1/hud/session/restore', {}, { credentials: 'include', headers: { 'X-Jarvis-HUD': 'restore' } }); if (run !== sessionGeneration) return; if (result.authorized !== true || !Number.isSafeInteger(result.expiresAt)) throw new Error('Session restoration was invalid.'); expiry = result.expiresAt * 1000; scheduleSessionWatch(run); } catch (error) { if (run !== sessionGeneration) return; if (error?.status === 401) { stop(); setLocked('Your phone session ended. Unlock again with your iPhone.'); } else scheduleSessionWatch(run); } };
+    const startSessionWatch = () => { stopSessionWatch(); scheduleSessionWatch(sessionGeneration); };
+    const unlock = (expiresAt) => { if (expiryTimer !== null) clearTimer(expiryTimer); unlocked = true; expiry = expiresAt * 1000; lock.hidden = true; app.inert = false; documentObject.body.dataset.jarvisSession = 'authenticated'; documentObject.dispatchEvent(new windowObject.Event('jarvis-session-unlocked')); expiryTimer = setTimer(() => { if (unlocked) setLocked('Your JARVIS session expired. Approve again on your iPhone.'); }, Math.max(0, expiry - now())); startSessionWatch(); };
     const stop = () => { generation++; if (timer !== null) clearTimer(timer); timer = null; busy = false; pollDelay = POLL_INTERVAL_MS; };
     const schedulePoll = (id, secret, run, delay = POLL_INTERVAL_MS) => {
       if (run !== generation || unlocked) return;
@@ -261,10 +265,11 @@
       if (startupSessionPending) return;
       if (documentObject.hidden) { stop(); if (!unlocked) setLocked('JARVIS is locked.'); }
       else if (expiry && expiry <= now()) { stop(); setLocked('Your JARVIS session expired. Approve again on your iPhone.'); void start(); }
+      else if (unlocked) void verifySession();
       else if (!unlocked && !busy) void start();
     });
     report(); setChecking();
-    if (windowObject.JARVIS_AUTH_CONFIG?.sessionRestore === true) void restore();
+    if (windowObject.JARVIS_AUTH_CONFIG?.sessionRestore === true) void restore().then((restored) => { if (!restored) void start(); });
     else void start();
     return { start, restore, lock: lockNow, isUnlocked: () => unlocked };
   }

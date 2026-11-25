@@ -348,7 +348,11 @@ test('staging Connections app uses only isolated Workers and keeps the owner bea
   assert.match(html, /staging-connections\.webmanifest/); assert.match(html, /Outlook Mail/); assert.match(html, /Facebook/); assert.match(html, /NO CONNECTION REQUIRED/);
   assert.match(script, /jarvis-auth-staging\.hlao-xiong\.workers\.dev/);
   assert.match(script, /jarvis-connected-apps-staging\.hlao-xiong\.workers\.dev/);
-  assert.doesNotMatch(`${html}\n${script}`, /staging-pairing-id|owner\/hud\/pairings\/approve/);
+  // Google-account authorization is separate from a short-lived, owner-bound
+  // glasses pairing approval. The phone page may expose only this scoped
+  // approval endpoint; it must not contain an OAuth token or bearer session.
+  assert.match(html, /staging-glasses-pairing-id/);
+  assert.match(script, /owner\/hud\/pairings\/approve/);
   assert.match(script, /\/v1\/logout/);
   assert.doesNotMatch(`${html}\n${script}`, /localStorage|sessionStorage|indexedDB|desktop-frvv2vt\.taile1cf65\.ts\.net|jarvis-glasses-connected-apps\.hlao-xiong\.workers\.dev/);
 });
